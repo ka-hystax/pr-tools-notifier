@@ -20,7 +20,8 @@
     "compile": "tsc -p tsconfig.build.json",
     "build": "pnpm run compile",
     "prepare": "tsc -p tsconfig.build.json",
-    "test": "vitest"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "zod": "4.4.3"
