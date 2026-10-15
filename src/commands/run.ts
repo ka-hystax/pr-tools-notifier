@@ -65,6 +65,8 @@ export async function runCommand(options: RunConfig, config: ConfigStore): Promi
     });
     return ok ? 0 : 1;
   } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
     for (const lock of locks) lock.release();
   }
 }
