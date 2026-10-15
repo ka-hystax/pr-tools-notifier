@@ -19,6 +19,7 @@ options of run:
       --interval 1m      time between polls: 90s, 5m, 1h (default and minimum: 1m)
       --commands LIST    comma-separated: mine,todo (default: both)
       --pr-tools PATH    run this gh-pr-tools entry script instead of \`gh pr-tools\`
+  -v, --version          print the version
   -h, --help             show this help`;
 
 export interface RunConfig {
@@ -32,6 +33,7 @@ export interface RunConfig {
 
 export type Parsed =
   | { kind: "help" }
+  | { kind: "version" }
   | { kind: "init" }
   | { kind: "send-test" }
   | { kind: "status" }
@@ -72,6 +74,7 @@ export function parseCli(argv: string[]): Parsed {
         commands: { type: "string" },
         "pr-tools": { type: "string" },
         yes: { type: "boolean", short: "y" },
+        version: { type: "boolean", short: "v" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -80,6 +83,7 @@ export function parseCli(argv: string[]): Parsed {
   }
   const { values, positionals } = parsed;
 
+  if (values.version) return { kind: "version" };
   if (values.help || positionals.length === 0) return { kind: "help" };
   if (positionals.length > 1) throw new UsageError(`unexpected argument '${positionals[1]}'`);
   if (values.yes && positionals[0] !== "reset") throw new UsageError("--yes is only for reset");

@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import { parseCli, UsageError, USAGE } from "./cli/args.js";
 import { createPrompter } from "./cli/prompt.js";
+import { readVersion } from "./cli/version.js";
 import { runInit } from "./commands/init.js";
 import { runReset } from "./commands/reset.js";
 import { runCommand } from "./commands/run.js";
@@ -24,6 +25,10 @@ async function main(argv: string[]): Promise<number> {
   }
   if (parsed.kind === "help") {
     console.log(USAGE);
+    return 0;
+  }
+  if (parsed.kind === "version") {
+    console.log(`pr-tools-notifier ${readVersion()}`);
     return 0;
   }
 

@@ -73,6 +73,12 @@ describe("parseCli", () => {
     expect(parseCli(["run", "-h"])).toEqual({ kind: "help" });
   });
 
+  test("reads --version and -v, which win over a command", () => {
+    expect(parseCli(["--version"])).toEqual({ kind: "version" });
+    expect(parseCli(["-v"])).toEqual({ kind: "version" });
+    expect(parseCli(["run", "--version"])).toEqual({ kind: "version" });
+  });
+
   test("knows the init, status and send-test commands", () => {
     expect(parseCli(["status"])).toEqual({ kind: "status" });
     expect(parseCli(["init"])).toEqual({ kind: "init" });
