@@ -1,6 +1,7 @@
 import { computeEvents, type Baseline, type NotifyEvent } from "../diff/diff.js";
 import { formatEvents, type FormatOptions, type OutMessage } from "../format/format.js";
 import type { StateStore } from "../state/store.js";
+import { botHint } from "../telegram/hints.js";
 import { errorMessage, type Command, type Logger, type Sink, type SnapshotSource, type TickResult } from "./types.js";
 
 export interface TickDeps {
@@ -55,7 +56,8 @@ export async function runTick({ commands, source, stores, sink, log, timeZone }:
     try {
       await sink.deliver(messages);
     } catch (err) {
-      const message = `delivery: ${errorMessage(err)}`;
+      const hint = botHint(err);
+      const message = `delivery: ${errorMessage(err)}${hint ? ` (${hint})` : ""}`;
       log.error(message);
       return { ok: false, errors: [...errors, message], events: events.length, messages: messages.length };
     }

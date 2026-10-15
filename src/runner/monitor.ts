@@ -3,6 +3,15 @@ import type { TickResult } from "./types.js";
 
 const ERROR_MAX = 300;
 
+function hintFor(error: string): string {
+  if (/unknown profile/i.test(error)) return "Check the profile with <code>gh pr-tools profile list</code>.";
+  if (/was not found in PATH/i.test(error)) return "Install <code>gh</code> or add it to PATH.";
+  if (!error.startsWith("delivery:") && /gh auth login|authenticat|bad credentials|HTTP 401/i.test(error)) {
+    return "Run <code>gh auth status</code>.";
+  }
+  return "Check <code>gh auth status</code> and the network.";
+}
+
 // One alert per outage: after enough failed ticks in a row, until a tick succeeds again.
 export class FailureMonitor {
   private failures = 0;
@@ -34,7 +43,7 @@ export class FailureMonitor {
     return (
       `⚠️ <b>Notifications are failing</b> since ${time} (${this.failures} attempts in a row)\n` +
       `<code>${escapeHtml(error)}</code>\n` +
-      "Check <code>gh auth status</code> and the network."
+      hintFor(this.lastError)
     );
   }
 

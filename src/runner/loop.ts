@@ -15,6 +15,9 @@ export const sleep: Sleep = (ms, signal) =>
     signal.addEventListener("abort", done, { once: true });
   });
 
+// A profile that does not exist on the very first tick is a typo, not an outage.
+const UNKNOWN_PROFILE = /unknown profile/i;
+
 export interface LoopDeps {
   tick: () => Promise<TickResult>;
   sink: Sink;
@@ -34,6 +37,7 @@ export async function runLoop(deps: LoopDeps): Promise<boolean> {
   const now = deps.now ?? (() => new Date());
   const wait = deps.sleep ?? sleep;
   let ok = true;
+  let first = true;
 
   while (!signal.aborted) {
     let result: TickResult;
@@ -44,6 +48,12 @@ export async function runLoop(deps: LoopDeps): Promise<boolean> {
       result = { ok: false, errors: [errorMessage(err)], events: 0, messages: 0 };
     }
     if (signal.aborted) break;
+
+    if (first && !result.ok && result.errors.every((e) => UNKNOWN_PROFILE.test(e))) {
+      log.error("stopping: that gh-pr-tools profile does not exist (see `gh pr-tools profile list`)");
+      return false;
+    }
+    first = false;
 
     ok = result.ok;
     monitor.record(result, now());

@@ -10,17 +10,23 @@ import { runTick } from "../runner/tick.js";
 import { ghSource } from "../sources/gh.js";
 import { LockError, type Lock } from "../state/lock.js";
 import { StateStore } from "../state/store.js";
-import { NOT_CONFIGURED, telegramSink } from "./sinks.js";
+import { checkBot, NOT_CONFIGURED, telegramBot } from "./sinks.js";
 
 // Resolves to the process exit code.
 export async function runCommand(options: RunConfig, config: ConfigStore): Promise<number> {
   const { profile, dryRun, once, intervalMs, commands, prToolsPath } = options;
   const controller = new AbortController();
-  const sink = dryRun ? new DryRunSink() : telegramSink(config, controller.signal);
-  if (!sink) {
+  const bot = dryRun ? null : telegramBot(config, controller.signal);
+  if (!dryRun && !bot) {
     console.error(NOT_CONFIGURED);
     return 1;
   }
+  const check = bot ? await checkBot(bot.api) : null;
+  if (check?.status === "rejected") {
+    console.error(`pr-tools-notifier: ${check.problem}`);
+    return 1;
+  }
+  const sink = bot?.sink ?? new DryRunSink();
 
   const log = createLogger();
   const dir = dryRun ? join(stateDir(), "dry-run") : stateDir();

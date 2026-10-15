@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { parseSnapshot, type MineSnapshot, type TodoSnapshot } from "../../contract/snapshot.js";
 import type { OutMessage } from "../../format/format.js";
 import { StateStore } from "../../state/store.js";
+import { TelegramError } from "../../telegram/api.js";
 import { runTick } from "../tick.js";
 import type { Command, Logger, Sink, SnapshotSource } from "../types.js";
 import { readFixture as fixture } from "../../__tests__/fixtures.js";
@@ -114,6 +115,18 @@ describe("runTick", () => {
     const retried = await h.tick();
     expect(retried).toMatchObject({ ok: true, events: 1 });
     expect(h.delivered).toHaveLength(1);
+  });
+
+  test("tells the user what to do when Telegram rejects the bot", async () => {
+    const h = setup();
+    await h.tick();
+    approve(h.state.mine, 101, "PRR_NEW");
+
+    h.failures.deliver = new TelegramError("sendMessage: 401 Unauthorized", 401);
+    const failed = await h.tick();
+    expect(failed.errors).toEqual([
+      "delivery: sendMessage: 401 Unauthorized (the bot token no longer works: run `pr-tools-notifier init`)",
+    ]);
   });
 
   test("still delivers one command when the other cannot be fetched", async () => {

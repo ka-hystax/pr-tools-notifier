@@ -50,6 +50,33 @@ function harness(results: (TickResult | Error)[], over: Partial<LoopDeps> = {}) 
 }
 
 describe("runLoop", () => {
+  const unknown: TickResult = {
+    ok: false,
+    errors: ["mine: exited with 1: gh pr-tools: unknown profile 'x'", "todo: exited with 1: gh pr-tools: unknown profile 'x'"],
+    events: 0,
+    messages: 0,
+  };
+
+  test("stops at once when the profile does not exist on the first tick", async () => {
+    const h = harness([unknown, ok]);
+    expect(await runLoop(h.deps)).toBe(false);
+    expect(h.ticks()).toBe(1);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  test("keeps going when the profile disappears after a good tick", async () => {
+    const h = harness([ok, unknown, unknown]);
+    await runLoop(h.deps);
+    expect(h.ticks()).toBe(4);
+  });
+
+  test("keeps going when only some first-tick errors name the profile", async () => {
+    const mixed: TickResult = { ...unknown, errors: [unknown.errors[0]!, "todo: timed out after 120s"] };
+    const h = harness([mixed]);
+    await runLoop(h.deps);
+    expect(h.ticks()).toBe(2);
+  });
+
   test("runs one tick and returns its outcome with --once", async () => {
     const h = harness([bad], { once: true });
     expect(await runLoop(h.deps)).toBe(false);

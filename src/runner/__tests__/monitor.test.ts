@@ -26,6 +26,19 @@ describe("FailureMonitor", () => {
     expect(alert).toContain("gh auth status");
   });
 
+  test.each([
+    ["mine: exited with 1: gh pr-tools: unknown profile 'work' — run: gh pr-tools profile list", "gh pr-tools profile list"],
+    ["mine: gh was not found in PATH", "add it to PATH"],
+    ["todo: exited with 1: To authenticate, run: gh auth login", "gh auth status"],
+    ["mine: exited with 1: HTTP 401: Bad credentials", "gh auth status"],
+    ["delivery: sendMessage: 401 Unauthorized (the bot token no longer works: run `pr-tools-notifier init`)", "network"],
+    ["mine: timed out after 120s", "network"],
+  ])("picks the hint for %j", (error, hint) => {
+    const monitor = new FailureMonitor(1);
+    monitor.record(bad(error), at("10:00"));
+    expect(monitor.pendingAlert("UTC")).toContain(hint);
+  });
+
   test("alerts only once per outage, and again after a recovery", () => {
     const monitor = new FailureMonitor(2);
     monitor.record(bad(), at("10:00"));
