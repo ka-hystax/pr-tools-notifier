@@ -1,16 +1,10 @@
 import { escapeHtml } from "../format/format.js";
+import { explainFailure } from "./explain.js";
 import type { TickResult } from "./types.js";
 
 const ERROR_MAX = 300;
 
-function hintFor(error: string): string {
-  if (/unknown profile/i.test(error)) return "Check the profile with <code>gh pr-tools profile list</code>.";
-  if (/was not found in PATH/i.test(error)) return "Install <code>gh</code> or add it to PATH.";
-  if (!error.startsWith("delivery:") && /gh auth login|authenticat|bad credentials|HTTP 401/i.test(error)) {
-    return "Run <code>gh auth status</code>.";
-  }
-  return "Check <code>gh auth status</code> and the network.";
-}
+const GENERIC_HINT = "Check <code>gh auth status</code> and the network.";
 
 // One alert per outage: after enough failed ticks in a row, until a tick succeeds again.
 export class FailureMonitor {
@@ -39,12 +33,10 @@ export class FailureMonitor {
     const time = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(
       this.since
     );
+    const explained = explainFailure(this.lastError);
     const error = this.lastError.length > ERROR_MAX ? `${this.lastError.slice(0, ERROR_MAX - 1)}…` : this.lastError;
-    return (
-      `⚠️ <b>Notifications are failing</b> since ${time} (${this.failures} attempts in a row)\n` +
-      `<code>${escapeHtml(error)}</code>\n` +
-      hintFor(this.lastError)
-    );
+    const detail = explained ? `${explained.summary}\n${explained.hint}` : `<code>${escapeHtml(error)}</code>\n${GENERIC_HINT}`;
+    return `⚠️ <b>Notifications are failing</b> since ${time} (${this.failures} attempts in a row)\n${detail}`;
   }
 
   markAlerted(): void {
