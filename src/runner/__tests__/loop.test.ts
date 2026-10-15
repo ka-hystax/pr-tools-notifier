@@ -64,6 +64,33 @@ describe("runLoop", () => {
     expect(h.sleeps).toEqual([]);
   });
 
+  test("stops at once when gh-pr-tools is too old for --json on the first tick", async () => {
+    const old: TickResult = {
+      ok: false,
+      errors: [
+        "mine: exited with 1: gh pr-tools mine: unknown option '--json' (supported: --long)",
+        "todo: exited with 1: gh pr-tools todo: unknown option '--json'",
+      ],
+      events: 0,
+      messages: 0,
+    };
+    const lines: string[] = [];
+    const h = harness([old, ok], { log: { ...log, error: (m) => void lines.push(m) } });
+    expect(await runLoop(h.deps)).toBe(false);
+    expect(h.ticks()).toBe(1);
+    expect(lines).toEqual(["stopping: this gh-pr-tools is too old, update it with `gh extension upgrade pr-tools`"]);
+  });
+
+  test("keeps going when the first-tick errors name different setup problems", async () => {
+    const mixed: TickResult = {
+      ...unknown,
+      errors: [unknown.errors[0]!, "todo: exited with 1: gh pr-tools todo: unknown option '--json'"],
+    };
+    const h = harness([mixed]);
+    await runLoop(h.deps);
+    expect(h.ticks()).toBe(2);
+  });
+
   test("keeps going when the profile disappears after a good tick", async () => {
     const h = harness([ok, unknown, unknown]);
     await runLoop(h.deps);

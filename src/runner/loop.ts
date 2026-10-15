@@ -15,8 +15,11 @@ export const sleep: Sleep = (ms, signal) =>
     signal.addEventListener("abort", done, { once: true });
   });
 
-// A profile that does not exist on the very first tick is a typo, not an outage.
-const UNKNOWN_PROFILE = /unknown profile/i;
+// Setup mistakes rather than outages: when every error of the very first tick is one of these, the run ends.
+const SETUP_ERRORS: [RegExp, string][] = [
+  [/unknown profile/i, "stopping: that gh-pr-tools profile does not exist (see `gh pr-tools profile list`)"],
+  [/unknown option '--json'/i, "stopping: this gh-pr-tools is too old, update it with `gh extension upgrade pr-tools`"],
+];
 
 export interface LoopDeps {
   tick: () => Promise<TickResult>;
@@ -49,8 +52,10 @@ export async function runLoop(deps: LoopDeps): Promise<boolean> {
     }
     if (signal.aborted) break;
 
-    if (first && !result.ok && result.errors.every((e) => UNKNOWN_PROFILE.test(e))) {
-      log.error("stopping: that gh-pr-tools profile does not exist (see `gh pr-tools profile list`)");
+    const setup =
+      first && !result.ok ? SETUP_ERRORS.find(([pattern]) => result.errors.every((e) => pattern.test(e))) : undefined;
+    if (setup) {
+      log.error(setup[1]);
       return false;
     }
     first = false;

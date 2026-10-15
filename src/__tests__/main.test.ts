@@ -109,6 +109,13 @@ describe("main", () => {
     expect(second.err).toMatch(/mine: \d+ PRs, 0 new events/);
   });
 
+  test("a run stops when the installed gh-pr-tools does not know --json", async () => {
+    const stub = fakePrTools(`echo "gh pr-tools $3: unknown option '--json' (supported: --long)" >&2\nexit 1`);
+    const r = await cli("run", "-p", "demo", "--dry-run", "--pr-tools", stub);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("stopping: this gh-pr-tools is too old");
+  });
+
   test("a run stops when the first poll reports an unknown profile", async () => {
     const stub = fakePrTools(`echo "gh pr-tools: unknown profile 'demo'" >&2\nexit 1`);
     const r = await cli("run", "-p", "demo", "--dry-run", "--pr-tools", stub);
