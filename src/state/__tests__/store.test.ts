@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { parseSnapshot } from "../../contract/snapshot.js";
 import { computeEvents, type Baseline } from "../../diff/diff.js";
 import { LockError } from "../lock.js";
-import { StateStore } from "../store.js";
+import { describeStates, StateStore } from "../store.js";
 import { readFixture as fixture } from "../../__tests__/fixtures.js";
 
 let root: string;
@@ -157,5 +157,34 @@ describe("StateStore", () => {
     const attempt2 = computeEvents(store.load().baseline, changed);
     expect(attempt1.events).toHaveLength(1);
     expect(attempt2.events).toEqual(attempt1.events);
+  });
+});
+
+describe("describeStates", () => {
+  test("lists each state file with its PR count and save time", () => {
+    new StateStore(dir, "work", "mine").save(baseline());
+    new StateStore(dir, "side-repo", "todo").save({ snapshot: parseSnapshot(fixture("todo")), missingTicks: {} });
+    const infos = describeStates(dir);
+    expect(infos.map((i) => [i.profile, i.command, i.prs])).toEqual([
+      ["side-repo", "todo", parseSnapshot(fixture("todo")).prs.length],
+      ["work", "mine", parseSnapshot(fixture("mine")).prs.length],
+    ]);
+    expect(infos.every((i) => typeof i.savedAt === "string")).toBe(true);
+  });
+
+  test("marks an unreadable file without touching it, and skips other files", () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "work-mine.json"), "not json");
+    writeFileSync(join(dir, "work-mine.json.lock"), "1");
+    writeFileSync(join(dir, "work-mine.json.corrupt"), "x");
+    expect(describeStates(dir)).toEqual([
+      { profile: "work", command: "mine", path: join(dir, "work-mine.json"), prs: null, savedAt: null },
+    ]);
+    expect(readFileSync(join(dir, "work-mine.json"), "utf8")).toBe("not json");
+    expect(existsSync(join(dir, "work-mine.json.corrupt"))).toBe(true);
+  });
+
+  test("is empty for a missing directory", () => {
+    expect(describeStates(join(root, "nope"))).toEqual([]);
   });
 });

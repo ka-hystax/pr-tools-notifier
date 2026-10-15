@@ -1,4 +1,5 @@
-import { closeSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { errorCode } from "../utils/errors.js";
 
 const UNKNOWN_OWNER_GRACE_MS = 5_000;
@@ -78,4 +79,18 @@ export function acquireLock(path: string): Lock {
     }
   }
   throw new LockError(path, readPid(path));
+}
+
+// Lock files in `dir` that a live process still holds.
+export function activeLocks(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => name.endsWith(".lock"))
+    .map((name) => join(dir, name))
+    .filter((path) => !isStale(path));
 }

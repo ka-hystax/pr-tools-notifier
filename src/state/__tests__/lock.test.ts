@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { acquireLock, LockError } from "../lock.js";
+import { acquireLock, activeLocks, LockError } from "../lock.js";
 
 let dir: string;
 let path: string;
@@ -78,5 +78,19 @@ describe("acquireLock", () => {
 
   test("surfaces unexpected filesystem errors", () => {
     expect(() => acquireLock(join(dir, "missing", "x.lock"))).toThrow(/ENOENT/);
+  });
+});
+
+describe("activeLocks", () => {
+  test("lists only locks held by a live process", () => {
+    const live = join(dir, "live.lock");
+    writeFileSync(live, String(process.pid));
+    writeFileSync(join(dir, "dead.lock"), String(deadPid()));
+    writeFileSync(join(dir, "state.json"), String(process.pid));
+    expect(activeLocks(dir)).toEqual([live]);
+  });
+
+  test("is empty for a missing directory", () => {
+    expect(activeLocks(join(dir, "missing"))).toEqual([]);
   });
 });

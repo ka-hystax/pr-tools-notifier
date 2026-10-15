@@ -1,4 +1,4 @@
-import { readFileSync, renameSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { ensurePrivateDir, writeFileAtomic } from "../utils/fs.js";
@@ -77,4 +77,41 @@ export class StateStore {
   save(baseline: Baseline): void {
     writeFileAtomic(this.path, JSON.stringify({ version: FILE_VERSION, savedAt: new Date().toISOString(), baseline }));
   }
+}
+
+export interface StateInfo {
+  profile: string;
+  command: Snapshot["command"];
+  path: string;
+  // null when the file cannot be read by this version; a run would set it aside.
+  prs: number | null;
+  savedAt: string | null;
+}
+
+// Read-only: unlike `load`, never moves a file aside.
+export function describeStates(dir: string): StateInfo[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const infos: StateInfo[] = [];
+  for (const name of names.sort()) {
+    const match = /^(.+)-(mine|todo)\.json$/.exec(name);
+    if (!match) continue;
+    const path = join(dir, name);
+    const info: StateInfo = { profile: match[1]!, command: match[2] as Snapshot["command"], path, prs: null, savedAt: null };
+    try {
+      const parsed = StateFile.safeParse(JSON.parse(readFileSync(path, "utf8")));
+      if (parsed.success) {
+        info.prs = parsed.data.baseline.snapshot.prs.length;
+        info.savedAt = parsed.data.savedAt;
+      }
+    } catch {
+      // unreadable: reported as such
+    }
+    infos.push(info);
+  }
+  return infos;
 }

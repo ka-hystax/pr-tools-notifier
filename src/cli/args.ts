@@ -7,6 +7,8 @@ export const USAGE = `usage: pr-tools-notifier <command>
 
 commands:
   init                   set up your own Telegram bot (once)
+  status                 show the bot, its check against Telegram and the saved state
+  reset [-y]             remove the saved bot token and state (asks first; -y skips the question)
   send-test              send sample notifications to check the setup
   run -p PROFILE         poll gh-pr-tools and send notifications
 
@@ -28,7 +30,13 @@ export interface RunConfig {
   prToolsPath?: string;
 }
 
-export type Parsed = { kind: "help" } | { kind: "init" } | { kind: "send-test" } | { kind: "run"; config: RunConfig };
+export type Parsed =
+  | { kind: "help" }
+  | { kind: "init" }
+  | { kind: "send-test" }
+  | { kind: "status" }
+  | { kind: "reset"; yes: boolean }
+  | { kind: "run"; config: RunConfig };
 
 const MIN_INTERVAL_MS = 60_000;
 const UNITS: Record<string, number> = { "": 1_000, s: 1_000, m: 60_000, h: 3_600_000 };
@@ -63,6 +71,7 @@ export function parseCli(argv: string[]): Parsed {
         interval: { type: "string" },
         commands: { type: "string" },
         "pr-tools": { type: "string" },
+        yes: { type: "boolean", short: "y" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -73,7 +82,10 @@ export function parseCli(argv: string[]): Parsed {
 
   if (values.help || positionals.length === 0) return { kind: "help" };
   if (positionals.length > 1) throw new UsageError(`unexpected argument '${positionals[1]}'`);
-  if (positionals[0] === "init" || positionals[0] === "send-test") return { kind: positionals[0] };
+  if (values.yes && positionals[0] !== "reset") throw new UsageError("--yes is only for reset");
+  if (positionals[0] === "reset") return { kind: "reset", yes: values.yes ?? false };
+  if (positionals[0] === "init" || positionals[0] === "send-test" || positionals[0] === "status")
+    return { kind: positionals[0] };
   if (positionals[0] !== "run") throw new UsageError(`unknown command '${positionals[0]}'`);
   if (!values.profile) throw new UsageError("--profile is required");
 

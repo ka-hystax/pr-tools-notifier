@@ -73,10 +73,19 @@ describe("parseCli", () => {
     expect(parseCli(["run", "-h"])).toEqual({ kind: "help" });
   });
 
-  test("knows the init and send-test commands", () => {
+  test("knows the init, status and send-test commands", () => {
+    expect(parseCli(["status"])).toEqual({ kind: "status" });
     expect(parseCli(["init"])).toEqual({ kind: "init" });
     expect(parseCli(["send-test"])).toEqual({ kind: "send-test" });
     expect(() => parseCli(["init", "extra"])).toThrow(/unexpected argument 'extra'/);
+  });
+
+  test("reads reset and its --yes flag", () => {
+    expect(parseCli(["reset"])).toEqual({ kind: "reset", yes: false });
+    expect(parseCli(["reset", "-y"])).toEqual({ kind: "reset", yes: true });
+    expect(parseCli(["reset", "--yes"])).toEqual({ kind: "reset", yes: true });
+    expect(() => parseCli(["init", "--yes"])).toThrow(/only for reset/);
+    expect(() => parseCli(["run", "-p", "x", "-y"])).toThrow(/only for reset/);
   });
 
   test("requires a profile", () => {

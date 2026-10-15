@@ -1,12 +1,16 @@
 #!/usr/bin/env node
+import { join } from "node:path";
 import { parseCli, UsageError, USAGE } from "./cli/args.js";
 import { createPrompter } from "./cli/prompt.js";
 import { runInit } from "./commands/init.js";
+import { runReset } from "./commands/reset.js";
 import { runCommand } from "./commands/run.js";
 import { runSendTest } from "./commands/sendTest.js";
-import { NOT_CONFIGURED, telegramSink } from "./commands/sinks.js";
+import { runStatus } from "./commands/status.js";
+import { checkBot, NOT_CONFIGURED, telegramSink } from "./commands/sinks.js";
 import { ConfigStore } from "./config/config.js";
-import { configDir } from "./config/paths.js";
+import { configDir, stateDir } from "./config/paths.js";
+import { activeLocks } from "./state/lock.js";
 import { TelegramApi } from "./telegram/api.js";
 
 async function main(argv: string[]): Promise<number> {
@@ -38,6 +42,35 @@ async function main(argv: string[]): Promise<number> {
     } finally {
       prompter.close();
     }
+  }
+
+  if (parsed.kind === "reset") {
+    const prompter = createPrompter();
+    try {
+      const state = stateDir();
+      const done = await runReset({
+        prompter,
+        dir: configDir(),
+        yes: parsed.yes,
+        out: (line) => console.log(line),
+        activeLocks: () => [...activeLocks(state), ...activeLocks(join(state, "dry-run"))],
+      });
+      return done ? 0 : 1;
+    } finally {
+      prompter.close();
+    }
+  }
+
+  if (parsed.kind === "status") {
+    const state = stateDir();
+    const healthy = await runStatus({
+      config,
+      stateDir: state,
+      check: (token) => checkBot(new TelegramApi({ token })),
+      activeLocks: () => activeLocks(state),
+      out: (line) => console.log(line),
+    });
+    return healthy ? 0 : 1;
   }
 
   if (parsed.kind === "send-test") {
