@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "command": "todo",
+  "generatedAt": "2026-10-13T10:00:00Z",
+  "repo": "acme/web",
+  "viewer": "dev-me",
+  "prs": [
+    {
+      "number": 201,
+      "url": "https://github.com/acme/web/pull/201",
+      "title": "PRJ-2001: add audit log",
+      "branch": "feature/PRJ-2001-audit",
+      "author": "alice",
+      "isDraft": false,
+      "createdAt": "2026-10-13T08:00:00Z",
+      "updatedAt": "2026-10-13T08:00:00Z",
+      "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reviews": [],
+      "approval": {
+        "threshold": 1,
+        "approvers": [],
+        "staleApprovers": [],
+        "changesRequestedBy": [],
+        "decision": "awaiting"
+      },
+      "threads": [],
+      "threadsTruncated": false,
+      "requestedFromMe": true
+    },
+    {
+      "number": 202,
+      "url": "https://github.com/acme/web/pull/202",
+      "title": "PRJ-2002: rework table filters",
+      "branch": "feature/PRJ-2002-filters",
+      "author": "bob",
+      "isDraft": false,
+      "createdAt": "2026-10-08T08:00:00Z",
+      "updatedAt": "2026-10-13T09:45:00Z",
+      "headOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "reviews": [
+        {
+          "id": "PRR_kwDOAAAA10",
+          "author": "dev-me",
+          "state": "COMMENTED",
+          "submittedAt": "2026-10-12T11:00:00Z",
+          "commitOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "approval": {
+        "threshold": 1,
+        "approvers": [],
+        "staleApprovers": [],
+        "changesRequestedBy": [],
+        "decision": "awaiting"
+      },
+      "threads": [
+        {
+          "id": "PRRT_kwDOAAAA10",
+          "state": "answered",
+          "opener": "dev-me",
+          "lastAuthor": "bob",
+          "watched": false,
+          "commentCount": 2,
+          "path": "src/table/filters.ts",
+          "url": "https://github.com/acme/web/pull/202#discussion_r2002",
+          "lastCommentAt": "2026-10-13T09:45:00Z",
+          "excerpt": "Good catch, updated the predicate."
+        }
+      ],
+      "threadsTruncated": false,
+      "requestedFromMe": false
+    }
+  ]
+}
