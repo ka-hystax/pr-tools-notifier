@@ -18,6 +18,7 @@ export type MergeStatus =
   | { kind: "unapproved" }
   | { kind: "todo"; pendingThreads: number; firstPendingThreadUrl: string | null; ciFailed: boolean; needsRebase: boolean }
   | { kind: "waiting_ci" }
+  | { kind: "checking" }
   | { kind: "github_blocked"; waitingFor: string[] }
   | { kind: "ready" };
 
@@ -81,8 +82,20 @@ function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads)
     return { kind: "todo", pendingThreads: pending.length, firstPendingThreadUrl: first?.url ?? null, ciFailed, needsRebase };
   }
   if (pr.ci.state === "pending") return { kind: "waiting_ci" };
+  if (pr.mergeState === "unknown") return { kind: "checking" };
   if (pr.mergeState === "blocked") return { kind: "github_blocked", waitingFor: pr.pendingReviewers };
   return { kind: "ready" };
+}
+
+// GitHub answers "unknown" while it recomputes mergeability. For the same commit the last real answer is kept
+// instead of guessing, so a conflict is not mistaken for a clean branch and a clean one is not announced twice.
+function carryMergeState(old: MinePullRequest[], curr: MinePullRequest[]): MinePullRequest[] {
+  const before = new Map(old.map((p) => [p.number, p]));
+  return curr.map((now) => {
+    const prev = before.get(now.number);
+    const keep = now.mergeState === "unknown" && prev && prev.mergeState !== "unknown" && prev.headOid === now.headOid;
+    return keep ? { ...now, mergeState: prev.mergeState } : now;
+  });
 }
 
 function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePullRequest): NotifyEvent[] {
@@ -160,8 +173,11 @@ export function computeEvents(prev: Baseline | null, curr: Snapshot): { events: 
   if (prev !== null && prev.snapshot.repo === curr.repo) {
     const old = prev.snapshot;
     if (old.command === "mine" && curr.command === "mine") {
-      const { events, prs, missingTicks } = diffPrs(old.prs, curr.prs, prev.missingTicks, (before, now) =>
-        mineEvents(ctx, before, now)
+      const { events, prs, missingTicks } = diffPrs(
+        old.prs,
+        carryMergeState(old.prs, curr.prs),
+        prev.missingTicks,
+        (before, now) => mineEvents(ctx, before, now)
       );
       return { events: events.sort(compareEvents), next: { snapshot: { ...curr, prs }, missingTicks } };
     }

@@ -107,6 +107,7 @@ export const SAMPLE_MESSAGES: { label: string; events: NotifyEvent[] }[] = [
         todo({ pendingThreads: 2, firstPendingThreadUrl: threadsUrl, ciFailed: true, needsRebase: true }),
       ],
       ["approved, CI still running", { kind: "waiting_ci" }],
+      ["approved, GitHub still checking the branch", { kind: "checking" }],
       ["approved, but GitHub blocks the merge", { kind: "github_blocked", waitingFor: ["backend"] }],
     ] as [string, MergeStatus][]
   ).map(([label, status]) => ({

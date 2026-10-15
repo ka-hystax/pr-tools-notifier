@@ -168,6 +168,8 @@ function verdict(status: MergeStatus, prUrl: string): string | null {
       return "🎉 <b>Time to merge!</b>";
     case "waiting_ci":
       return "⏳ Waiting for CI to finish";
+    case "checking":
+      return "⏳ GitHub is still checking whether the branch can be merged";
     case "github_blocked":
       return `🚧 GitHub blocks the merge: ${waitingFor(status.waitingFor)}`;
     case "todo": {

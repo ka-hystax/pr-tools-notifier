@@ -717,7 +717,6 @@ describe("mine: merge status carried by an approval", () => {
     ["blocked", false],
     ["unstable", false],
     ["has_hooks", false],
-    ["unknown", false],
   ] as const)("a %s branch needs a rebase: %s", (mergeState, expected) => {
     const status = statusOf(
       approved101((pr) => {
@@ -725,6 +724,18 @@ describe("mine: merge status carried by an approval", () => {
       })
     );
     expect(status.kind === "todo" && status.needsRebase).toBe(expected);
+  });
+
+  test("an unknown branch with no earlier answer to keep is still being checked", () => {
+    const status = statusOf(
+      approved101((pr) => {
+        pr.mergeState = "unknown";
+      }),
+      (s) => {
+        pr101(s).mergeState = "unknown";
+      }
+    );
+    expect(status).toEqual({ kind: "checking" });
   });
 
   test("waits for a running CI", () => {
@@ -836,5 +847,77 @@ describe("mine: ready_to_merge and merge_blocked", () => {
     const first = computeEvents(base(mine(place("pendingThread"))), mine(place("ready")));
     expect(first.events.map((e) => e.kind)).toContain("ready_to_merge");
     expect(computeEvents(first.next, mine(place("ready"))).events.filter((e) => e.pr.number === 102)).toEqual([]);
+  });
+});
+
+describe("mine: GitHub still computing mergeability", () => {
+  const unknown = (s: MineSnapshot) => {
+    pr102(s).mergeState = "unknown";
+  };
+  const only102 = (events: ReturnType<typeof computeEvents>["events"]) => events.filter((e) => e.pr.number === 102);
+  const mergeStateOf = (result: ReturnType<typeof computeEvents>) =>
+    (result.next.snapshot as MineSnapshot).prs.find((p) => p.number === 102)!.mergeState;
+
+  test("a conflict stays a conflict while GitHub answers unknown", () => {
+    const result = computeEvents(
+      base(mine(place("dirty"))),
+      mine((s) => {
+        place("ready")(s);
+        unknown(s);
+      })
+    );
+    expect(only102(result.events)).toEqual([]);
+    expect(mergeStateOf(result)).toBe("dirty");
+  });
+
+  test("announces the PR once GitHub settles on a clean state", () => {
+    const first = computeEvents(
+      base(mine(place("dirty"))),
+      mine((s) => {
+        place("ready")(s);
+        unknown(s);
+      })
+    );
+    expect(only102(computeEvents(first.next, mine(place("ready"))).events).map((e) => e.kind)).toEqual(["ready_to_merge"]);
+  });
+
+  test("a ready PR is not announced again after an unknown poll", () => {
+    const afterUnknown = computeEvents(
+      base(mine(place("ready"))),
+      mine((s) => {
+        place("ready")(s);
+        unknown(s);
+      })
+    );
+    expect(only102(afterUnknown.events)).toEqual([]);
+    expect(only102(computeEvents(afterUnknown.next, mine(place("ready"))).events)).toEqual([]);
+  });
+
+  test("does not call a PR ready on an unknown state after a new commit", () => {
+    const result = computeEvents(
+      base(mine(place("dirty"))),
+      mine((s) => {
+        place("ready")(s);
+        unknown(s);
+        pr102(s).headOid = "new-head";
+      })
+    );
+    expect(only102(result.events)).toEqual([]);
+    expect(mergeStateOf(result)).toBe("unknown");
+  });
+
+  test("an approval seen while GitHub is checking says so instead of promising a merge", () => {
+    const events = only102(
+      computeEvents(
+        base(mine(place("unapproved"))),
+        mine((s) => {
+          place("ready")(s);
+          unknown(s);
+          pr102(s).headOid = "new-head";
+          pr102(s).reviews = [mkReview({ id: "NEW", author: "carol" })];
+        })
+      ).events
+    );
+    expect(events).toEqual([expect.objectContaining({ kind: "review_approved", status: { kind: "checking" } })]);
   });
 });

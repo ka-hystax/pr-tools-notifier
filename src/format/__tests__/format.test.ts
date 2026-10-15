@@ -306,6 +306,12 @@ describe("merge verdict", () => {
     expect(text).not.toContain("Time to merge");
   });
 
+  test("does not promise a merge while GitHub is still checking the branch", () => {
+    const text = verdict({ kind: "checking" });
+    expect(text).toContain("\n⏳ GitHub is still checking whether the branch can be merged");
+    expect(text).not.toContain("Time to merge");
+  });
+
   test("says why GitHub blocks the merge", () => {
     expect(verdict({ kind: "github_blocked", waitingFor: ["backend"] })).toContain(
       "\n🚧 GitHub blocks the merge: waiting for review from <b>backend</b>"
