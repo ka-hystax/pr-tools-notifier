@@ -341,7 +341,9 @@ describe("merge verdict", () => {
 });
 
 describe("merge events", () => {
-  const readyEvent: NotifyEvent = { kind: "ready_to_merge", pr: ref() };
+  const met = { ...pr.approval, approvers: ["alice", "carol"], staleApprovers: [], decision: "approved" as const };
+  const readyEvent: NotifyEvent = { kind: "ready_to_merge", pr: ref(), approval: met };
+  const readyWith = (approval: object): NotifyEvent => ({ ...readyEvent, approval: { ...met, ...approval } }) as NotifyEvent;
   const blocked = (waitingFor: string[]): NotifyEvent => ({ kind: "merge_blocked", pr: ref(), waitingFor });
 
   test("announces that a PR can now be merged, leading with the verdict", () => {
@@ -349,6 +351,16 @@ describe("merge events", () => {
     expect(message!.text.startsWith("🎉 <b>Time to merge!</b>\n<a href=")).toBe(true);
     expect(message!.buttons).toEqual([[{ text: "🔗 Open", url: pr.url }]]);
     expect(message!.silent).toBe(false);
+  });
+
+  test("adds the approval count when some approvals predate the latest commits", () => {
+    const stale = { approvers: [], staleApprovers: ["alice", "carol"], decision: "approved_stale" as const };
+    expect(fmt([readyWith(stale)])[0]).toMatch(/^🎉 <b>Time to merge!<\/b>\n✅ Approved 2\/2 \(2 stale\)\n<a href=/);
+    expect(fmt([readyWith({ approvers: ["carol"], staleApprovers: ["alice"] })])[0]).toContain("✅ Approved 2/2 (1 stale)");
+  });
+
+  test("keeps the plain message when every approval is fresh", () => {
+    expect(fmt([readyEvent])[0]).not.toContain("Approved");
   });
 
   test("announces a merge that GitHub still blocks, with the reason", () => {
@@ -550,6 +562,11 @@ describe("silent delivery", () => {
   test("is silent for an approval below the threshold and loud at it", () => {
     expect(silent([approved()])).toBe(true);
     expect(silent([approved("carol", { approvers: ["alice", "carol"], decision: "approved" })])).toBe(false);
+  });
+
+  test("is loud when the threshold is met only through stale approvals", () => {
+    const stale = { approvers: ["carol"], staleApprovers: ["alice"], decision: "approved_stale" };
+    expect(silent([approved("carol", stale)])).toBe(false);
   });
 
   test("is loud for people's threads, replies, change requests and review requests", () => {

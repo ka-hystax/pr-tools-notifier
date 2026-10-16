@@ -1,4 +1,4 @@
-import type { Thread } from "../contract/snapshot.js";
+import type { Approval, Thread } from "../contract/snapshot.js";
 import type { MergeStatus, NotifyEvent, PrRef } from "../diff/diff.js";
 
 export const MAX_MESSAGE_LENGTH = 4096;
@@ -112,7 +112,7 @@ const isChangesRequested = (e: NotifyEvent): e is ChangesRequested => e.kind ===
 
 // Bot threads and approvals below the threshold are worth seeing, not hearing.
 const isLowPriority = (e: NotifyEvent): boolean =>
-  (e.kind === "thread_pending" && e.thread.watched) || (e.kind === "review_approved" && e.approval.decision !== "approved");
+  (e.kind === "thread_pending" && e.thread.watched) || (e.kind === "review_approved" && e.approval.decision === "awaiting");
 
 // One author's threads of one kind on one PR; several collapse into a single linked count.
 function threadLine(events: ThreadEvent[]): string {
@@ -187,17 +187,22 @@ function verdict(status: MergeStatus, prUrl: string): string | null {
   }
 }
 
+// "2/2 (1 stale)": approvals counted, and how many of them predate the latest commits.
+function approvalCount({ approvers, staleApprovers, threshold }: Approval): string {
+  const stale = staleApprovers.length > 0 ? ` (${staleApprovers.length} stale)` : "";
+  return `${approvers.length + staleApprovers.length}/${threshold}${stale}`;
+}
+
 function approvalLine(events: Approved[]): string {
   const first = events[0]!;
-  const { approvers, staleApprovers, threshold } = first.approval;
-  const stale = staleApprovers.length > 0 ? ` (${staleApprovers.length} stale)` : "";
-  const line = `✅ ${names(events.map((e) => e.review.author))} approved · ${approvers.length + staleApprovers.length}/${threshold}${stale}`;
+  const line = `✅ ${names(events.map((e) => e.review.author))} approved · ${approvalCount(first.approval)}`;
   const third = verdict(first.status, first.pr.url);
   return third ? `${line}\n${third}` : line;
 }
 
 function readyLine(event: ReadyToMerge): Line {
-  return { text: "🎉 <b>Time to merge!</b>", url: event.pr.url, events: [event] };
+  const stale = event.approval.staleApprovers.length > 0 ? `\n✅ Approved ${approvalCount(event.approval)}` : "";
+  return { text: `🎉 <b>Time to merge!</b>${stale}`, url: event.pr.url, events: [event] };
 }
 
 function blockedLine(event: MergeBlocked): Line {

@@ -37,7 +37,7 @@ export type NotifyEvent =
   | { kind: "review_requested"; pr: PrRef }
   | { kind: "thread_answered"; pr: PrRef; thread: Thread }
   | { kind: "ci_failed"; pr: PrRef; failedJobs: string[] }
-  | { kind: "ready_to_merge"; pr: PrRef }
+  | { kind: "ready_to_merge"; pr: PrRef; approval: Approval }
   | { kind: "merge_blocked"; pr: PrRef; waitingFor: string[] };
 
 export const MAX_MISSING_TICKS = 3;
@@ -72,8 +72,9 @@ function carryThreads<P extends PullRequest>(before: P | undefined, now: P): P {
 }
 
 // Only a pending thread (still waiting for the author) holds a merge back; answered and resolved ones do not.
+// Approvals made before a rebase or a small fix (stale) still count; if GitHub insists on fresh ones, it reports "blocked".
 function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads): MergeStatus {
-  if (pr.approval.decision !== "approved") return { kind: "unapproved" };
+  if (pr.approval.decision === "awaiting") return { kind: "unapproved" };
   const pending = (threads ?? []).filter((t) => t.state === "pending");
   const first = [...pending].sort((a, b) => compareText(a.lastCommentAt, b.lastCommentAt) || compareText(a.id, b.id))[0];
   const ciFailed = pr.ci.state === "fail";
@@ -122,7 +123,7 @@ function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePull
   // An approval already carries the verdict, so these only report changes that come without one.
   if (!events.some((e) => e.kind === "review_approved")) {
     const was = mergeStatus(before).kind;
-    if (status.kind === "ready" && was !== "ready") events.push({ kind: "ready_to_merge", pr });
+    if (status.kind === "ready" && was !== "ready") events.push({ kind: "ready_to_merge", pr, approval: now.approval });
     if (status.kind === "github_blocked" && was !== "github_blocked") {
       events.push({ kind: "merge_blocked", pr, waitingFor: status.waitingFor });
     }

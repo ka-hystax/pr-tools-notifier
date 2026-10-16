@@ -122,7 +122,20 @@ export const SAMPLE_MESSAGES: { label: string; events: NotifyEvent[] }[] = [
       },
     ],
   })),
-  { label: "blockers cleared, ready to merge", events: [{ kind: "ready_to_merge", pr: P102 }] },
+  {
+    label: "blockers cleared, ready to merge",
+    events: [{ kind: "ready_to_merge", pr: P102, approval: approval({ approvers: ["alice", "carol"], decision: "approved" }) }],
+  },
+  {
+    label: "ready to merge, approvals predate the latest commits",
+    events: [
+      {
+        kind: "ready_to_merge",
+        pr: P102,
+        approval: approval({ approvers: [], staleApprovers: ["alice", "carol"], decision: "approved_stale" }),
+      },
+    ],
+  },
   { label: "all set, but GitHub blocks the merge", events: [{ kind: "merge_blocked", pr: P102, waitingFor: ["backend"] }] },
   {
     label: "changes requested",

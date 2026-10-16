@@ -921,3 +921,46 @@ describe("mine: GitHub still computing mergeability", () => {
     expect(events).toEqual([expect.objectContaining({ kind: "review_approved", status: { kind: "checking" } })]);
   });
 });
+
+describe("mine: approvals made before the latest commits", () => {
+  const stale = (s: MineSnapshot) => {
+    pr102(s).approval = { ...pr102(s).approval, approvers: [], staleApprovers: ["alice", "carol"], decision: "approved_stale" };
+  };
+  const events102 = (from: Position, to: Position, editCurr?: (s: MineSnapshot) => void) =>
+    computeEvents(
+      base(mine(place(from))),
+      mine((s) => {
+        place(to)(s);
+        editCurr?.(s);
+      })
+    ).events.filter((e) => e.pr.number === 102);
+
+  test("still count, so the PR is announced as ready and carries the stale approvals", () => {
+    const events = events102("dirty", "ready", stale);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "ready_to_merge",
+        approval: expect.objectContaining({ staleApprovers: ["alice", "carol"], decision: "approved_stale" }),
+      }),
+    ]);
+  });
+
+  test("an approval that meets the threshold only with stale ones carries the verdict", () => {
+    const events = events102("unapproved", "ready", (s) => {
+      stale(s);
+      pr102(s).reviews = [mkReview({ id: "NEW", author: "carol" })];
+    });
+    expect(events).toEqual([expect.objectContaining({ kind: "review_approved", status: { kind: "ready" } })]);
+  });
+
+  test("turning stale after a push is not an event by itself", () => {
+    expect(events102("ready", "ready", stale)).toEqual([]);
+  });
+
+  test("a PR that stays below the threshold is still unapproved", () => {
+    const awaiting = (s: MineSnapshot) => {
+      pr102(s).approval = { ...pr102(s).approval, approvers: [], staleApprovers: ["alice"], decision: "awaiting" };
+    };
+    expect(events102("unapproved", "ready", awaiting)).toEqual([]);
+  });
+});
