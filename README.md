@@ -128,3 +128,7 @@ pnpm check          # prettier; pnpm fix to format
 ```
 
 `src/contract/snapshot.ts` holds the zod schemas that check the `gh pr-tools --json` documents; the format itself is described in the gh-pr-tools README. Sample documents are in `src/__tests__/fixtures/snapshots/`.
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE).

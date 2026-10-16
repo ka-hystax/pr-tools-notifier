@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Telegram notifications for gh-pr-tools",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ka-hystax/pr-tools-notifier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ka-hystax/pr-tools-notifier/issues"
+  },
+  "homepage": "https://github.com/ka-hystax/pr-tools-notifier#readme",
   "type": "module",
   "bin": {
     "pr-tools-notifier": "dist/cli.js"
