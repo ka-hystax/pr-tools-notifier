@@ -74,6 +74,16 @@ export class StateStore {
     return { baseline: null, reset: `${reason}; moved to ${this.path}.corrupt` };
   }
 
+  // The saved baseline, read-only: unlike `load`, never sets an unreadable file aside.
+  peek(): Baseline | null {
+    try {
+      const parsed = StateFile.safeParse(JSON.parse(readFileSync(this.path, "utf8")));
+      return parsed.success ? parsed.data.baseline : null;
+    } catch {
+      return null;
+    }
+  }
+
   save(baseline: Baseline): void {
     writeFileAtomic(this.path, JSON.stringify({ version: FILE_VERSION, savedAt: new Date().toISOString(), baseline }));
   }

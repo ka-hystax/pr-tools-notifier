@@ -24,7 +24,7 @@ export interface GhOptions {
   onWarning?: (line: string) => void;
 }
 
-const defaultExec = promisify(execFile) as unknown as Exec;
+export const defaultExec = promisify(execFile) as unknown as Exec;
 
 interface ExecFailure {
   code?: string | number;
@@ -33,7 +33,7 @@ interface ExecFailure {
   stderr?: string;
 }
 
-function describeFailure(err: unknown, file: string, timeoutMs: number): string {
+export function describeFailure(err: unknown, file: string, timeoutMs: number): string {
   const e = err as ExecFailure;
   if (e.code === "ENOENT") return `${file} was not found in PATH`;
   if (e.name === "AbortError") return "aborted";

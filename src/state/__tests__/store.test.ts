@@ -33,6 +33,24 @@ describe("StateStore", () => {
     expect(store.load()).toEqual({ baseline: baseline() });
   });
 
+  describe("peek", () => {
+    test("reads the saved baseline without touching anything", () => {
+      const store = new StateStore(dir, "work", "mine");
+      expect(store.peek()).toBeNull();
+      store.save(baseline());
+      expect(store.peek()).toEqual(baseline());
+    });
+
+    test("leaves an unreadable file where it is, unlike load", () => {
+      const store = new StateStore(dir, "work", "mine");
+      store.save(baseline());
+      writeFileSync(store.path, "{ nope");
+      expect(store.peek()).toBeNull();
+      expect(existsSync(store.path)).toBe(true);
+      expect(existsSync(`${store.path}.corrupt`)).toBe(false);
+    });
+  });
+
   test("keeps a separate file per profile and command", () => {
     new StateStore(dir, "work", "mine").save(baseline());
     expect(new StateStore(dir, "work", "todo").load().baseline).toBeNull();

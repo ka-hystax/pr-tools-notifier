@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { ConfigStore } from "../../config/config.js";
+import { SettingsStore } from "../../config/settings.js";
 import { runInit, type InitApi, type Prompter } from "../init.js";
 import type { Update } from "../../telegram/api.js";
 
@@ -23,7 +24,7 @@ const CODE = "abc123";
 
 const start = (id: number, chatId: number, text = `/start ${CODE}`, type = "private"): Update => ({
   update_id: id,
-  message: { text, chat: { id: chatId, type } },
+  message: { message_id: id, date: 0, text, chat: { id: chatId, type } },
 });
 
 interface Scenario {
@@ -33,13 +34,14 @@ interface Scenario {
   me?: () => Promise<{ username: string }>;
   polls?: (Update[] | Error)[];
   send?: Error;
+  settings?: SettingsStore;
 }
 
 function run(s: Scenario = {}) {
   const out: string[] = [];
   const asked: string[] = [];
   const offsets: (number | undefined)[] = [];
-  const sent: { chatId: string | number; text: string }[] = [];
+  const sent: { chatId: string | number; text: string; keyboard?: string[][] | undefined }[] = [];
   const created: string[] = [];
   const answers = [...(s.answers ?? [])];
   let polls = 0;
@@ -68,13 +70,14 @@ function run(s: Scenario = {}) {
     },
     async sendMessage(params) {
       if (s.send) throw s.send;
-      sent.push({ chatId: params.chatId, text: params.text });
+      sent.push({ chatId: params.chatId, text: params.text, keyboard: params.keyboard });
     },
   };
 
   const result = runInit({
     prompter,
     config,
+    ...(s.settings ? { settings: s.settings } : {}),
     createApi: (token) => {
       created.push(token);
       return api;
@@ -87,6 +90,15 @@ function run(s: Scenario = {}) {
 }
 
 describe("runInit", () => {
+  test("says what is required and what is optional, and installs the buttons with the greeting", async () => {
+    const h = run({ polls: [[start(1, 42)]] });
+    await h.result;
+    expect(h.out.join("\n")).toContain("Needed: gh-pr-tools with a profile");
+    expect(h.out.join("\n")).toContain("Jira is optional");
+    expect(h.sent[0]!.keyboard).toEqual([["📥 Todo", "📤 Mine"], ["ℹ️ Status"]]);
+    expect(h.sent[0]!.text).toContain("/todo");
+  });
+
   test("captures the chat id from the start message that carries the code, then saves", async () => {
     const h = run({ polls: [[start(1, 5, "/start other"), start(2, 42)]] });
     expect(await h.result).toBe(true);
@@ -167,5 +179,59 @@ describe("runInit", () => {
     const accepted = run({ confirm: true, polls: [[start(1, 42)]] });
     expect(await accepted.result).toBe(true);
     expect(config.load()).toEqual({ botUsername: "my_pr_bot", chatId: "42", token: TOKEN });
+  });
+});
+
+describe("runInit: the optional Jira question", () => {
+  let settings: SettingsStore;
+
+  beforeEach(() => {
+    settings = new SettingsStore(join(root, "cfg"));
+  });
+
+  test("is not asked without a settings store", async () => {
+    const h = run({ polls: [[start(1, 42)]], confirm: true });
+    await h.result;
+    expect(h.out.join("\n")).not.toContain("Jira:");
+  });
+
+  test("can be skipped: nothing is saved and the later command is shown", async () => {
+    const h = run({ polls: [[start(1, 42)]], settings });
+    expect(await h.result).toBe(true);
+    expect(h.out.join("\n")).toContain("Optional, Jira:");
+    expect(h.out.join("\n")).toContain("`pr-tools-notifier config set merge-status Merge`");
+    expect(settings.exists()).toBe(false);
+  });
+
+  test("saves the statuses and reminds that Jira is read through the gh-pr-tools profile", async () => {
+    const h = run({ polls: [[start(1, 42)]], settings, confirm: true, answers: [" Merge , Ready "] });
+    expect(await h.result).toBe(true);
+    expect(settings.load().mergeStatuses).toEqual(["Merge", "Ready"]);
+    expect(h.out.join("\n")).toContain("Saved MERGE_STATUS=Merge,Ready.");
+    expect(h.out.join("\n")).toContain("gh-pr-tools profile");
+  });
+
+  test("an empty answer saves nothing", async () => {
+    const h = run({ polls: [[start(1, 42)]], settings, confirm: true, answers: ["  "] });
+    expect(await h.result).toBe(true);
+    expect(settings.exists()).toBe(false);
+    expect(h.out.join("\n")).toContain("No status entered, skipped.");
+  });
+
+  test("is not asked again when a status is already set", async () => {
+    settings.set("MERGE_STATUS", "Merge");
+    const h = run({ polls: [[start(1, 42)]], settings, confirm: true });
+    await h.result;
+    expect(h.out.join("\n")).toContain("waits for Merge (already set");
+    expect(h.out.join("\n")).not.toContain("Set it up now");
+  });
+
+  test("a broken settings file does not undo a saved bot", async () => {
+    mkdirSync(join(root, "cfg"), { recursive: true });
+    writeFileSync(settings.path, "NOPE=1\n");
+    const h = run({ polls: [[start(1, 42)]], settings });
+    expect(await h.result).toBe(true);
+    expect(config.exists()).toBe(true);
+    expect(h.out.join("\n")).toContain("Could not save the Jira setting");
   });
 });

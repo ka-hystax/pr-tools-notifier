@@ -11,15 +11,41 @@ export class TelegramError extends Error {
 
 export interface Update {
   update_id: number;
-  message?: { text?: string; chat: { id: number; type: string } };
+  message?: { message_id: number; date: number; text?: string; chat: { id: number; type: string } };
+  callback_query?: { id: string; data?: string; message?: { message_id: number; chat: { id: number; type: string } } };
 }
+
+// A button inside a message: a link, or a tap the bot hears about as callback data (up to 64 bytes).
+export type ApiButton = Button | { text: string; data: string };
 
 export interface SendParams {
   chatId: string | number;
   text: string;
   silent?: boolean;
-  buttons?: Button[][];
+  buttons?: ApiButton[][];
+  // A keyboard that replaces the phone's own and stays until replaced.
+  keyboard?: string[][];
   plain?: boolean;
+}
+
+export interface EditParams {
+  chatId: string | number;
+  messageId: number;
+  text: string;
+  buttons?: ApiButton[][];
+}
+
+export interface BotCommand {
+  command: string;
+  description: string;
+}
+
+function inlineKeyboard(buttons: ApiButton[][]) {
+  return {
+    inline_keyboard: buttons.map((row) =>
+      row.map((b) => ("url" in b ? { text: b.text, url: b.url } : { text: b.text, callback_data: b.data }))
+    ),
+  };
 }
 
 export interface ApiOptions {
@@ -63,19 +89,50 @@ export class TelegramApi {
   }
 
   async getUpdates(offset: number | undefined, timeoutSec: number): Promise<Update[]> {
-    const body: Record<string, unknown> = { timeout: timeoutSec, allowed_updates: ["message"] };
+    const body: Record<string, unknown> = { timeout: timeoutSec, allowed_updates: ["message", "callback_query"] };
     if (offset !== undefined) body.offset = offset;
     return this.call<Update[]>("getUpdates", body, timeoutSec * 1000);
   }
 
-  async sendMessage({ chatId, text, silent, buttons, plain }: SendParams): Promise<void> {
+  async sendMessage({ chatId, text, silent, buttons, keyboard, plain }: SendParams): Promise<{ messageId: number }> {
     const body: Record<string, unknown> = { chat_id: chatId, text, link_preview_options: { is_disabled: true } };
     if (!plain) body.parse_mode = "HTML";
     if (silent) body.disable_notification = true;
     if (buttons && buttons.length > 0) {
-      body.reply_markup = { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, url: b.url }))) };
+      body.reply_markup = inlineKeyboard(buttons);
+    } else if (keyboard && keyboard.length > 0) {
+      body.reply_markup = {
+        keyboard: keyboard.map((row) => row.map((text) => ({ text }))),
+        resize_keyboard: true,
+        is_persistent: true,
+      };
     }
-    await this.call("sendMessage", body);
+    const message = await this.call<{ message_id: number }>("sendMessage", body);
+    return { messageId: message.message_id };
+  }
+
+  async editMessageText({ chatId, messageId, text, buttons }: EditParams): Promise<void> {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    };
+    if (buttons && buttons.length > 0) body.reply_markup = inlineKeyboard(buttons);
+    await this.call("editMessageText", body);
+  }
+
+  async deleteMessage(chatId: string | number, messageId: number): Promise<void> {
+    await this.call("deleteMessage", { chat_id: chatId, message_id: messageId });
+  }
+
+  async answerCallbackQuery(id: string, text?: string): Promise<void> {
+    await this.call("answerCallbackQuery", { callback_query_id: id, ...(text ? { text } : {}) });
+  }
+
+  async setMyCommands(commands: BotCommand[]): Promise<void> {
+    await this.call("setMyCommands", { commands });
   }
 
   private redact(text: string): string {

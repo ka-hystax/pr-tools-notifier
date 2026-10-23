@@ -41,6 +41,7 @@ export async function main(argv: string[]): Promise<number> {
       const saved = await runInit({
         prompter,
         config,
+        settings: new SettingsStore(configDir()),
         createApi: (token) => new TelegramApi({ token }),
         out: (line) => console.log(line),
       });

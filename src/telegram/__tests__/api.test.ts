@@ -12,7 +12,7 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-const okResult = (result: unknown = true) => json({ ok: true, result });
+const okResult = (result: unknown = { message_id: 7 }) => json({ ok: true, result });
 
 function harness(responses: (Response | Error)[], over: { signal?: AbortSignal } = {}) {
   const sent: Sent[] = [];
@@ -78,13 +78,79 @@ describe("getMe and getUpdates", () => {
     await expect(harness([okResult({ id: 1 })]).api.getMe()).rejects.toThrow(/no username/);
   });
 
-  test("asks for messages only, with the offset and the long-poll timeout", async () => {
+  test("asks for messages and button taps only, with the offset and the long-poll timeout", async () => {
     const h = harness([okResult([{ update_id: 7 }])]);
     expect(await h.api.getUpdates(8, 20)).toEqual([{ update_id: 7 }]);
-    expect(h.sent[0]!.body).toEqual({ timeout: 20, allowed_updates: ["message"], offset: 8 });
+    expect(h.sent[0]!.body).toEqual({ timeout: 20, allowed_updates: ["message", "callback_query"], offset: 8 });
     const first = harness([okResult([])]);
     await first.api.getUpdates(undefined, 0);
     expect(first.sent[0]!.body).not.toHaveProperty("offset");
+  });
+});
+
+describe("talking to the owner", () => {
+  test("sendMessage returns the id of the message it created", async () => {
+    const h = harness([okResult({ message_id: 55 })]);
+    expect(await h.api.sendMessage({ chatId: 1, text: "x" })).toEqual({ messageId: 55 });
+  });
+
+  test("sends callback buttons next to url buttons", async () => {
+    const h = harness([okResult()]);
+    await h.api.sendMessage({
+      chatId: 1,
+      text: "x",
+      buttons: [
+        [
+          { text: "🔄", data: "r:mine" },
+          { text: "Open", url: "https://x.test" },
+        ],
+      ],
+    });
+    expect(h.sent[0]!.body.reply_markup).toEqual({
+      inline_keyboard: [
+        [
+          { text: "🔄", callback_data: "r:mine" },
+          { text: "Open", url: "https://x.test" },
+        ],
+      ],
+    });
+  });
+
+  test("sends a persistent reply keyboard", async () => {
+    const h = harness([okResult()]);
+    await h.api.sendMessage({ chatId: 1, text: "x", keyboard: [["📥 Todo", "📤 Mine"], ["ℹ️ Status"]] });
+    expect(h.sent[0]!.body.reply_markup).toEqual({
+      keyboard: [[{ text: "📥 Todo" }, { text: "📤 Mine" }], [{ text: "ℹ️ Status" }]],
+      resize_keyboard: true,
+      is_persistent: true,
+    });
+  });
+
+  test("an inline keyboard wins over a reply keyboard, since a message carries only one", async () => {
+    const h = harness([okResult()]);
+    await h.api.sendMessage({ chatId: 1, text: "x", buttons: [[{ text: "a", data: "b" }]], keyboard: [["c"]] });
+    expect(h.sent[0]!.body.reply_markup).toHaveProperty("inline_keyboard");
+  });
+
+  test("edits, deletes, answers taps and registers commands", async () => {
+    const h = harness([okResult(), okResult(), okResult(), okResult(), okResult()]);
+    await h.api.editMessageText({ chatId: 1, messageId: 9, text: "new", buttons: [[{ text: "x", data: "y" }]] });
+    await h.api.deleteMessage(1, 9);
+    await h.api.answerCallbackQuery("q1", "Refreshing…");
+    await h.api.answerCallbackQuery("q2");
+    await h.api.setMyCommands([{ command: "todo", description: "d" }]);
+    expect(h.sent.map((s) => s.url.split("/").at(-1))).toEqual([
+      "editMessageText",
+      "deleteMessage",
+      "answerCallbackQuery",
+      "answerCallbackQuery",
+      "setMyCommands",
+    ]);
+    expect(h.sent[0]!.body).toMatchObject({ chat_id: 1, message_id: 9, text: "new", parse_mode: "HTML" });
+    expect(h.sent[1]!.body).toEqual({ chat_id: 1, message_id: 9 });
+    expect(h.sent[2]!.body).toEqual({ callback_query_id: "q1", text: "Refreshing…" });
+    expect(h.sent[3]!.body).toEqual({ callback_query_id: "q2" });
+    expect(h.sent[4]!.body).toEqual({ commands: [{ command: "todo", description: "d" }] });
   });
 });
 

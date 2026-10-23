@@ -14,10 +14,10 @@ commands:
   config set KEY VALUE   change a setting; config unset KEY removes it
   reset [-y]             remove the saved bot token, settings and state (asks first; -y skips the question)
   send-test              send sample notifications to check the setup
-  run -p PROFILE         poll gh-pr-tools and send notifications
+  run [-p PROFILE]       poll gh-pr-tools, send notifications and answer /todo and /mine
 
 options of run:
-  -p, --profile NAME        gh-pr-tools profile to use (required)
+  -p, --profile NAME        gh-pr-tools profile to use (default: the only one)
       --dry-run             print the messages instead of sending them
       --once                run a single poll and exit
       --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
@@ -27,7 +27,7 @@ options of run:
   -h, --help                show this help`;
 
 export interface RunConfig {
-  profile: string;
+  profile?: string; // absent: the only gh-pr-tools profile
   dryRun: boolean;
   once: boolean;
   intervalMs?: number; // absent: the setting POLL_INTERVAL, or one minute
@@ -113,14 +113,13 @@ export function parseCli(argv: string[]): Parsed {
   if (positionals[0] === "init" || positionals[0] === "send-test" || positionals[0] === "status")
     return { kind: positionals[0] };
   if (positionals[0] !== "run") throw new UsageError(`unknown command '${positionals[0]}'`);
-  if (!values.profile) throw new UsageError("--profile is required");
 
   const config: RunConfig = {
-    profile: values.profile,
     dryRun: values["dry-run"] ?? false,
     once: values.once ?? false,
     commands: parseCommands(values.commands ?? "mine,todo"),
   };
+  if (values.profile) config.profile = values.profile;
   if (values.interval !== undefined) config.intervalMs = parseInterval(values.interval);
   if (values["pr-tools"]) config.prToolsPath = values["pr-tools"];
   return { kind: "run", config };

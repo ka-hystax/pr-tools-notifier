@@ -2,7 +2,7 @@
 
 Telegram notifications for your pull requests, on top of [gh-pr-tools](https://github.com/ek-hystax/gh-pr-tools).
 
-A small process on your machine polls `gh pr-tools mine` and `todo`, compares each snapshot with the previous one and sends only what changed to your own Telegram bot. Nothing runs in the cloud and nothing listens for incoming connections.
+A small process on your machine polls `gh pr-tools mine` and `todo`, compares each snapshot with the previous one and sends only what changed to your own Telegram bot. You can also ask the bot for your lists (`/todo`, `/mine`). Nothing runs in the cloud and nothing listens for incoming connections: the bot only reads its own messages from Telegram.
 
 ```
 💬 alice opened a thread
@@ -55,7 +55,7 @@ To update, run `git pull && npm install` in the clone; the linked command picks 
 pr-tools-notifier init
 ```
 
-It asks for a token from [@BotFather](https://t.me/BotFather) (`/newbot`), prints a `t.me/<bot>?start=<code>` link, and picks up your chat id when you press Start. If that does not work, you can paste the chat id by hand. Then check the setup:
+It asks for a token from [@BotFather](https://t.me/BotFather) (`/newbot`), prints a `t.me/<bot>?start=<code>` link, and picks up your chat id when you press Start. If that does not work, you can paste the chat id by hand. At the end it asks, as an optional step, whether "Time to merge" should wait for a Jira status (see [Waiting for Jira](#waiting-for-jira-optional)); gh-pr-tools is required, Jira is not. Then check the setup:
 
 ```bash
 pr-tools-notifier send-test
@@ -66,10 +66,43 @@ You get one sample of every notification kind, with the quiet ones arriving sile
 **4. Run.**
 
 ```bash
-pr-tools-notifier run -p PROFILE
+pr-tools-notifier run
 ```
 
-Keep it in a terminal tab or tmux. The first poll only records the current state (`first run, saved N PRs as the baseline`), so you are not flooded with old PRs.
+With one gh-pr-tools profile that is all; with several, say which: `run -p PROFILE`. Keep it in a terminal tab or tmux. The first poll only records the current state (`first run, saved N PRs as the baseline`), so you are not flooded with old PRs.
+
+### Asking the bot
+
+While `run` is going, the bot also answers you. It has buttons under the input field and a `/` menu:
+
+| Command   | Answer                                                                                         |
+| --------- | ---------------------------------------------------------------------------------------------- |
+| `/todo`   | PRs waiting for your review: requested, replied to, or just waiting                            |
+| `/mine`   | your open PRs, what to do next for each; what needs you first, what only waits below a divider |
+| `/status` | the profile, the last poll and the settings                                                    |
+| `/help`   | what the bot can do (`/start` shows it too)                                                    |
+
+```
+📤 Mine · 3 PRs · 10:00
+
+🟢 #1281 Localization
+ready to merge · 2/2 · 3d
+
+🔴 #1216 PRJ-1865. Fix the date picker
+changes requested by bob · CI failed · 2 threads · 1/2 · 4d
+
+Waiting on others · 1
+
+⏳ #1289 PRJ-1992. Raise the upload limit
+waiting for carol, backend · 0/2 · 1d
+                                          [🔄 Refresh] [✖ Close]
+```
+
+A list comes from the last poll when that is under two minutes old, otherwise from a fresh request (a few seconds; if GitHub cannot be reached, the last poll is shown with a note). `🔄 Refresh` asks again without touching what the notifications are compared against. Long lists get `Next ▶` and `◀ Prev`.
+
+The bot keeps one answer on screen: asking for something else, or pressing `✖ Close`, takes the previous answer and your own command message down, so the chat holds notifications and the latest view, never old lists. Notifications are not deleted.
+
+Only the chat you connected is heard; messages from anyone else are ignored (the terminal says so once). A command older than two minutes, for example one sent while the laptop slept, is dropped instead of answered late. Only one `run` reads the bot's messages (`state/bot.lock`); another `run` for a different profile still sends its notifications.
 
 ### Waiting for Jira (optional)
 
@@ -117,9 +150,9 @@ pr-tools-notifier status                show the bot, its check against Telegram
 pr-tools-notifier config [set|unset]   show or change the settings (Jira merge status, poll interval)
 pr-tools-notifier reset [-y]            remove the saved token, settings and state (asks first; -y skips the question)
 pr-tools-notifier send-test             send sample notifications
-pr-tools-notifier run -p PROFILE        poll and notify
+pr-tools-notifier run [-p PROFILE]      poll, notify and answer /todo and /mine
 
-  -p, --profile NAME        gh-pr-tools profile (required)
+  -p, --profile NAME        gh-pr-tools profile (default: the only one)
       --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
       --commands LIST       mine,todo (default: both)
       --once                poll once and exit
@@ -143,12 +176,13 @@ pr-tools-notifier run -p PROFILE        poll and notify
 
 `~/.config/pr-tools-notifier/` (`$XDG_CONFIG_HOME` is respected):
 
-| File                         | Content                                        |
-| ---------------------------- | ---------------------------------------------- |
-| `config.json`                | bot username, chat id, the encrypted token     |
-| `secret.key`                 | the key for the token (AES-256-GCM, mode 0600) |
-| `settings.env`               | your settings, see [Settings](#settings)       |
-| `state/<profile>-<cmd>.json` | the last snapshot, used as the baseline        |
+| File                         | Content                                                |
+| ---------------------------- | ------------------------------------------------------ |
+| `config.json`                | bot username, chat id, the encrypted token             |
+| `secret.key`                 | the key for the token (AES-256-GCM, mode 0600)         |
+| `settings.env`               | your settings, see [Settings](#settings)               |
+| `bot.json`                   | whether the bot greeted you, which answer is on screen |
+| `state/<profile>-<cmd>.json` | the last snapshot, used as the baseline                |
 
 The key sits next to the token, so the token stays out of backups, synced dotfiles and greps, but not from someone who can read the whole directory. Revoke a leaked token with `/revoke` in @BotFather and run `init` again. To remove everything, delete the directory.
 
@@ -158,7 +192,7 @@ The key sits next to the token, so the token stays out of backups, synced dotfil
 - **Deleted profile or logged-out `gh`.** A profile name that does not exist, or a gh-pr-tools too old for `--json`, stops `run` at once when it shows up on the first poll. Later, every poll fails. After three, one `⚠️` message arrives with the reason and what to check (for example `gh pr-tools profile list`); then Telegram stays quiet until a poll succeeds, while the terminal keeps logging each failure. The state is kept, so restoring the profile for the same repo continues where it stopped.
 - **Dead bot.** `pr-tools-notifier status` checks the token against Telegram. `run` does the same at start and stops with `getMe: 401 …` if Telegram rejects it. A token that dies later, or a bot you blocked, shows up in the terminal as `delivery: … 401` or `403` (Telegram cannot carry that alert). The events are kept and arrive after the fix: unblock the bot and press Start, or, for a deleted or revoked bot, stop `run`, run `pr-tools-notifier init` with a new token and start `run` again.
 - **Removing everything.** Check what exists with `pr-tools-notifier status` (bot, last poll per profile, whether a `run` is active). `pr-tools-notifier reset` deletes `~/.config/pr-tools-notifier/` after asking (`-y` skips the question) and refuses while `run` is active. gh-pr-tools settings are not touched. The bot stays in Telegram until you send `/deletebot` (or `/revoke` for the token only) to @BotFather. To drop the command too, run `npm unlink -g pr-tools-notifier` (pnpm: `pnpm remove -g pr-tools-notifier`) and delete the clone.
-- **Starting from scratch**, for a demo or a clean install: `reset` (it drops your settings too), then `init`, `send-test` and `run -p PROFILE`. If you share your screen, the token is visible in the BotFather chat, so revoke it afterwards.
+- **Starting from scratch**, for a demo or a clean install: `reset` (it drops your settings too), then `init`, `send-test` and `run`. If you share your screen, the token is visible in the BotFather chat, so revoke it afterwards.
 
 ## Development
 

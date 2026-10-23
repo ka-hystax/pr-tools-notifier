@@ -146,4 +146,112 @@ describe("main", () => {
     expect(r.err).toContain("waits for the Jira status: Merge");
     expect(r.err).toContain("stopping: this gh-pr-tools is too old for the Jira merge status");
   });
+
+  describe("without -p", () => {
+    // The stub answers `profile list` with the given text, and the snapshots otherwise.
+    const stub = (profiles: string) => {
+      writeFileSync(join(root, "mine.json"), readFixtureText("mine"));
+      writeFileSync(join(root, "todo.json"), readFixtureText("todo"));
+      return fakePrTools(
+        `case "$1" in profile) printf '%s\n' "${profiles}";; *) case "$3" in mine) cat "${root}/mine.json";; todo) cat "${root}/todo.json";; esac;; esac`
+      );
+    };
+
+    test("polls the only profile there is", async () => {
+      const r = await cli("run", "--dry-run", "--once", "--pr-tools", stub("demo (cwd)"));
+      expect(r.code).toBe(0);
+      expect(r.err).toContain("profile demo (the only one)");
+      expect(existsSync(join(configDir(), "state", "dry-run", "demo-mine.json"))).toBe(true);
+    });
+
+    test("asks for a choice when there are several", async () => {
+      const r = await cli("run", "--dry-run", "--once", "--pr-tools", stub("a\nb"));
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("there are several gh-pr-tools profiles (a, b): choose one with -p NAME");
+    });
+
+    test("sends to init when there is none", async () => {
+      const r = await cli("run", "--dry-run", "--once", "--pr-tools", stub("(no profiles — run: gh pr-tools init)"));
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("run `gh pr-tools init`");
+    });
+  });
+
+  describe("answering commands while polling", () => {
+    // A tiny Telegram: records every call and hands out the queued updates.
+    function fakeTelegram() {
+      const calls: { method: string; body: Record<string, any> }[] = [];
+      const queue: object[] = [];
+      let nextId = 500;
+      const reply = (result: unknown) =>
+        new Response(JSON.stringify({ ok: true, result }), { headers: { "content-type": "application/json" } });
+      const fetchFn = async (url: string, init?: { body?: string; signal?: AbortSignal }) => {
+        const method = url.split("/").pop()!;
+        const body = JSON.parse(init?.body ?? "{}");
+        calls.push({ method, body });
+        if (method === "getMe") return reply({ username: "demo_bot" });
+        if (method === "sendMessage") return reply({ message_id: nextId++ });
+        if (method === "getUpdates") {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
+          return reply(queue.splice(0));
+        }
+        return reply(true);
+      };
+      return { calls, queue, fetchFn };
+    }
+
+    test("a /mine typed in Telegram is answered from the same process that polls", async () => {
+      new ConfigStore(configDir()).save({ botUsername: "demo_bot", chatId: "42", token: "123456:TOKEN" });
+      writeFileSync(join(root, "mine.json"), readFixtureText("mine"));
+      writeFileSync(join(root, "todo.json"), readFixtureText("todo"));
+      const stub = fakePrTools(
+        `case "$1" in profile) echo demo;; *) case "$3" in mine) cat "${root}/mine.json";; todo) cat "${root}/todo.json";; esac;; esac`
+      );
+      const telegram = fakeTelegram();
+      vi.stubGlobal("fetch", telegram.fetchFn);
+
+      const running = cli("run", "--pr-tools", stub);
+      await vi.waitFor(() => expect(telegram.calls.some((c) => c.method === "setMyCommands")).toBe(true), { timeout: 5_000 });
+      telegram.queue.push({
+        update_id: 1,
+        message: { message_id: 9, date: Math.floor(Date.now() / 1000), text: "/mine", chat: { id: 42, type: "private" } },
+      });
+      await vi.waitFor(() => expect(telegram.calls.some((c) => (c.body.text ?? "").includes("Mine"))).toBe(true), {
+        timeout: 5_000,
+      });
+      await vi.waitFor(() =>
+        expect(telegram.calls.some((c) => c.method === "deleteMessage" && c.body.message_id === 9)).toBe(true)
+      );
+
+      process.emit("SIGINT");
+      const result = await running;
+      vi.unstubAllGlobals();
+      expect(result.code).toBe(0);
+      expect(result.err).toContain("listening for commands");
+      expect(existsSync(join(configDir(), "state", "bot.lock"))).toBe(false);
+    });
+
+    test("a second run only sends notifications while the first one answers", async () => {
+      new ConfigStore(configDir()).save({ botUsername: "demo_bot", chatId: "42", token: "123456:TOKEN" });
+      writeFileSync(join(root, "mine.json"), readFixtureText("mine"));
+      writeFileSync(join(root, "todo.json"), readFixtureText("todo"));
+      const stub = fakePrTools(
+        `case "$1" in profile) echo demo;; *) case "$3" in mine) cat "${root}/mine.json";; todo) cat "${root}/todo.json";; esac;; esac`
+      );
+      mkdirSync(join(configDir(), "state"), { recursive: true });
+      writeFileSync(join(configDir(), "state", "bot.lock"), String(process.pid));
+      const telegram = fakeTelegram();
+      vi.stubGlobal("fetch", telegram.fetchFn);
+
+      const running = cli("run", "--pr-tools", stub);
+      // The first poll saves the baseline, which only happens once the run is up and listening for Ctrl+C.
+      await vi.waitFor(() => expect(existsSync(join(configDir(), "state", "demo-mine.json"))).toBe(true), { timeout: 5_000 });
+      process.emit("SIGINT");
+      const result = await running;
+      vi.unstubAllGlobals();
+      expect(result.err).toContain("another run already answers commands");
+      expect(telegram.calls.some((c) => c.method === "getUpdates")).toBe(false);
+    });
+  });
 });

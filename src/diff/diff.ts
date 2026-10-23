@@ -85,7 +85,11 @@ function carryThreads<P extends PullRequest>(before: P | undefined, now: P): P {
 
 // Only a pending thread (still waiting for the author) holds a merge back; answered and resolved ones do not.
 // Approvals made before a rebase or a small fix (stale) still count; if GitHub insists on fresh ones, it reports "blocked".
-function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads, hold: WaitingJira | null = null): MergeStatus {
+export function mergeStatus(
+  pr: MinePullRequest,
+  threads: Thread[] | null = pr.threads,
+  hold: WaitingJira | null = null
+): MergeStatus {
   if (pr.approval.decision === "awaiting") return { kind: "unapproved" };
   const pending = (threads ?? []).filter((t) => t.state === "pending");
   const first = [...pending].sort((a, b) => compareText(a.lastCommentAt, b.lastCommentAt) || compareText(a.id, b.id))[0];
@@ -102,7 +106,7 @@ function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads,
 
 // The ticket holds the merge back when a gate is set and the ticket is not (yet) in one of its statuses;
 // an unknown status (no token, failed lookup) counts as "not yet". PRs without a ticket are never held.
-function holdFor(
+export function holdFor(
   pr: MinePullRequest,
   gate: MergeGate | undefined,
   ticket: JiraTicket | null | undefined = pr.jira

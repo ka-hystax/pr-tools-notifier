@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import { Bot } from "../bot/bot.js";
+import { BotStateStore } from "../bot/state.js";
 import type { RunConfig } from "../cli/args.js";
 import { createLogger } from "../cli/logger.js";
 import type { ConfigStore } from "../config/config.js";
@@ -10,8 +12,10 @@ import { runLoop } from "../runner/loop.js";
 import { FailureMonitor } from "../runner/monitor.js";
 import { runTick } from "../runner/tick.js";
 import { ghSource } from "../sources/gh.js";
-import { LockError, type Lock } from "../state/lock.js";
+import { ProfileError, resolveProfile } from "../sources/profiles.js";
+import { acquireLock, LockError, type Lock } from "../state/lock.js";
 import { StateStore } from "../state/store.js";
+import { ensurePrivateDir } from "../utils/fs.js";
 import { checkBot, NOT_CONFIGURED, telegramBot } from "./sinks.js";
 
 // The flag wins over the setting, which wins over the default.
@@ -21,7 +25,7 @@ export function pollInterval(options: Pick<RunConfig, "intervalMs">, settings: S
 
 // Resolves to the process exit code.
 export async function runCommand(options: RunConfig, config: ConfigStore, settings: Settings = {}): Promise<number> {
-  const { profile, dryRun, once, commands, prToolsPath } = options;
+  const { dryRun, once, commands, prToolsPath } = options;
   const intervalMs = pollInterval(options, settings);
   const mergeStatuses = commands.includes("mine") ? settings.mergeStatuses : undefined;
   const controller = new AbortController();
@@ -37,11 +41,24 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
   }
   const sink = bot?.sink ?? new DryRunSink();
 
+  let profile: string;
+  try {
+    profile = await resolveProfile({
+      ...(options.profile ? { profile: options.profile } : {}),
+      ...(prToolsPath ? { prToolsPath } : {}),
+    });
+  } catch (err) {
+    if (!(err instanceof ProfileError)) throw err;
+    console.error(`pr-tools-notifier: ${err.message}`);
+    return 1;
+  }
+
   const log = createLogger();
   const dir = dryRun ? join(stateDir(), "dry-run") : stateDir();
   const stores = { mine: new StateStore(dir, profile, "mine"), todo: new StateStore(dir, profile, "todo") };
 
   const locks: Lock[] = [];
+  let listen = !dryRun && !once;
   try {
     for (const command of commands) locks.push(stores[command].lock());
   } catch (err) {
@@ -51,6 +68,21 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
       return 1;
     }
     throw err;
+  }
+
+  // Only one process may read the bot's messages; the others still send notifications.
+  if (bot && !once) {
+    try {
+      ensurePrivateDir(dir);
+      locks.push(acquireLock(join(dir, "bot.lock")));
+    } catch (err) {
+      if (!(err instanceof LockError)) {
+        for (const lock of locks) lock.release();
+        throw err;
+      }
+      log.warn(`another run already answers commands (${err.message}); this one only sends notifications`);
+      listen = false;
+    }
   }
 
   const stop = () => controller.abort();
@@ -67,10 +99,25 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
     });
     const mode = dryRun ? "dry run" : "sending to Telegram";
     log.info(
-      `profile ${profile}: ${commands.join(" + ")}${once ? ", one poll" : `, every ${Math.round(intervalMs / 1000)}s`}, ${mode}`
+      `profile ${profile}${options.profile ? "" : " (the only one)"}: ${commands.join(" + ")}${once ? ", one poll" : `, every ${Math.round(intervalMs / 1000)}s`}, ${mode}`
     );
     if (mergeStatuses)
       log.info(`"Time to merge" waits for the Jira status: ${mergeStatuses.join(", ")} (MERGE_STATUS in settings)`);
+    const listener =
+      bot && listen
+        ? new Bot({
+            api: bot.api,
+            chatId: bot.chatId,
+            profile,
+            commands,
+            source,
+            stores,
+            state: new BotStateStore(config.dir),
+            log,
+            signal: controller.signal,
+            settings: () => ({ intervalMs, ...(mergeStatuses ? { mergeStatuses } : {}) }),
+          }).run()
+        : Promise.resolve();
     const ok = await runLoop({
       tick: () => runTick({ commands, source, stores, sink, log, ...(mergeStatuses ? { mergeStatuses } : {}) }),
       sink,
@@ -80,6 +127,8 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
       once,
       signal: controller.signal,
     });
+    controller.abort();
+    await listener;
     return ok ? 0 : 1;
   } finally {
     process.off("SIGINT", stop);

@@ -72,7 +72,7 @@ function escapeAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
-function clip(text: string, max: number): string {
+export function clip(text: string, max: number): string {
   const chars = Array.from(text);
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
 }
@@ -85,15 +85,15 @@ function clipWords(text: string, max: number): string {
   return `${space > max * 0.6 ? head.slice(0, space) : head}…`;
 }
 
-function link(url: string, label: string): string {
+export function link(url: string, label: string): string {
   return `<a href="${escapeAttr(url)}">${label}</a>`;
 }
 
-function bold(text: string): string {
+export function bold(text: string): string {
   return `<b>${escapeHtml(text)}</b>`;
 }
 
-function names(authors: string[]): string {
+export function names(authors: string[]): string {
   const unique = [...new Set(authors)];
   return unique.slice(0, MAX_NAMES).map(bold).join(", ") + (unique.length > MAX_NAMES ? ` +${unique.length - MAX_NAMES}` : "");
 }
@@ -163,11 +163,11 @@ function joinItems(items: string[], word = "and"): string {
   return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} ${word} ${items.at(-1)}`;
 }
 
-function ticketLink(ticket: JiraTicket): string {
+export function ticketLink(ticket: JiraTicket): string {
   return ticket.url ? link(ticket.url, escapeHtml(ticket.key)) : escapeHtml(ticket.key);
 }
 
-const italic = (text: string): string => `<i>${escapeHtml(text)}</i>`;
+export const italic = (text: string): string => `<i>${escapeHtml(text)}</i>`;
 
 // Where the ticket stands, for the line that says what the merge waits for.
 function ticketNow(ticket: JiraTicket): string {
@@ -205,7 +205,7 @@ function verdict(status: MergeStatus, prUrl: string): string | null {
 }
 
 // "2/2 (1 stale)": approvals counted, and how many of them predate the latest commits.
-function approvalCount({ approvers, staleApprovers, threshold }: Approval): string {
+export function approvalCount({ approvers, staleApprovers, threshold }: Approval): string {
   const stale = staleApprovers.length > 0 ? ` (${staleApprovers.length} stale)` : "";
   return `${approvers.length + staleApprovers.length}/${threshold}${stale}`;
 }

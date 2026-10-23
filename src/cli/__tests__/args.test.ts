@@ -132,8 +132,11 @@ describe("parseCli", () => {
     expect(() => parseCli(["run", "-p", "x", "-y"])).toThrow(/only for reset/);
   });
 
-  test("requires a profile", () => {
-    expect(() => parseCli(["run"])).toThrow(/--profile is required/);
+  test("leaves the profile open when it is not named: the only one is used", () => {
+    expect(parseCli(["run"])).toEqual({
+      kind: "run",
+      config: { dryRun: false, once: false, commands: ["mine", "todo"] },
+    });
   });
 
   test("rejects unknown commands and options", () => {

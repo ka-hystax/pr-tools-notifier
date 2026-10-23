@@ -4,7 +4,7 @@ import type { Sink } from "../runner/types.js";
 import { TelegramError, type SendParams } from "./api.js";
 
 export interface Sender {
-  sendMessage(params: SendParams): Promise<void>;
+  sendMessage(params: SendParams): Promise<unknown>;
 }
 
 export interface SinkOptions {
