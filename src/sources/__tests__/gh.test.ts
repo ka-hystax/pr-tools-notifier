@@ -22,6 +22,10 @@ function fake(stdout: string): { exec: Exec; calls: Call[] } {
   };
 }
 
+function withStderr(stdout: string, stderr: string): Exec {
+  return async () => ({ stdout, stderr });
+}
+
 function failing(error: object): Exec {
   return async () => {
     throw Object.assign(new Error("failed"), error);
@@ -50,6 +54,42 @@ describe("ghSource", () => {
     await ghSource({ profile: "work", signal: controller.signal, timeoutMs: 5_000, exec })("mine");
     expect(calls[0]!.options.signal).toBe(controller.signal);
     expect(calls[0]!.options.timeout).toBe(5_000);
+  });
+
+  describe("Jira tickets", () => {
+    const withoutJira = JSON.stringify({
+      ...JSON.parse(mineJson),
+      prs: JSON.parse(mineJson).prs.map(({ jira: _jira, ...pr }: Record<string, unknown>) => pr),
+    });
+    const withJira = JSON.stringify({
+      ...JSON.parse(mineJson),
+      prs: JSON.parse(mineJson).prs.map((pr: object, i: number) => ({
+        ...pr,
+        jira: i === 0 ? { key: "PRJ-1", url: null, status: null } : null,
+      })),
+    });
+
+    test("a gh-pr-tools that does not report them is refused when the merge gate needs them", async () => {
+      const source = ghSource({ profile: "w", exec: fake(withoutJira).exec, jiraRequired: true });
+      await expect(source("mine")).rejects.toThrow("gh-pr-tools does not report Jira tickets");
+    });
+
+    test("is accepted when every PR carries the field, null or not", async () => {
+      const snapshot = await ghSource({ profile: "w", exec: fake(withJira).exec, jiraRequired: true })("mine");
+      expect(snapshot.command === "mine" && snapshot.prs[0]!.jira).toEqual({ key: "PRJ-1", url: null, status: null });
+    });
+
+    test("is not looked for without the gate, and never for todo", async () => {
+      await expect(ghSource({ profile: "w", exec: fake(withoutJira).exec })("mine")).resolves.toBeDefined();
+      await expect(ghSource({ profile: "w", exec: fake(todoJson).exec, jiraRequired: true })("todo")).resolves.toBeDefined();
+    });
+  });
+
+  test("passes what gh-pr-tools prints on stderr to the warning hook", async () => {
+    const lines: string[] = [];
+    const exec = withStderr(mineJson, "gh pr-tools: Jira rejected the API token (HTTP 401)\n\n  second line \n");
+    await ghSource({ profile: "w", exec, onWarning: (l) => lines.push(l) })("mine");
+    expect(lines).toEqual(["gh pr-tools: Jira rejected the API token (HTTP 401)", "second line"]);
   });
 
   test("explains a missing gh", async () => {

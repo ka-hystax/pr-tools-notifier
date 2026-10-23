@@ -81,6 +81,22 @@ describe("runLoop", () => {
     expect(lines).toEqual(["stopping: this gh-pr-tools is too old, update it with `gh extension upgrade pr-tools`"]);
   });
 
+  test("stops at once when gh-pr-tools does not report Jira tickets on the first tick", async () => {
+    const old: TickResult = {
+      ok: false,
+      errors: ["mine: gh-pr-tools does not report Jira tickets (needed for MERGE_STATUS)"],
+      events: 0,
+      messages: 0,
+    };
+    const lines: string[] = [];
+    const h = harness([old, ok], { log: { ...log, error: (m) => void lines.push(m) } });
+    expect(await runLoop(h.deps)).toBe(false);
+    expect(h.ticks()).toBe(1);
+    expect(lines).toEqual([
+      "stopping: this gh-pr-tools is too old for the Jira merge status, update it with `gh extension upgrade pr-tools`",
+    ]);
+  });
+
   test("keeps going when the first-tick errors name different setup problems", async () => {
     const mixed: TickResult = {
       ...unknown,

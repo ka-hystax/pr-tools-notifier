@@ -1,4 +1,4 @@
-import type { Approval, Thread } from "../contract/snapshot.js";
+import type { Approval, JiraTicket, Thread } from "../contract/snapshot.js";
 import type { MergeStatus, NotifyEvent, PrRef } from "../diff/diff.js";
 
 export const MAX_MESSAGE_LENGTH = 4096;
@@ -46,6 +46,8 @@ type ChangesRequested = Extract<NotifyEvent, { kind: "review_changes_requested" 
 type CiFailed = Extract<NotifyEvent, { kind: "ci_failed" }>;
 type ReadyToMerge = Extract<NotifyEvent, { kind: "ready_to_merge" }>;
 type MergeBlocked = Extract<NotifyEvent, { kind: "merge_blocked" }>;
+type ReviewPassed = Extract<NotifyEvent, { kind: "review_passed" }>;
+type TicketInMerge = Extract<NotifyEvent, { kind: "ticket_in_merge" }>;
 type ReviewRequested = Extract<NotifyEvent, { kind: "review_requested" }>;
 
 // Most urgent first within a PR.
@@ -55,7 +57,9 @@ const RANK: Record<NotifyEvent["kind"], number> = {
   review_changes_requested: 2,
   thread_pending: 3,
   thread_answered: 4,
+  ticket_in_merge: 5,
   ready_to_merge: 5,
+  review_passed: 6,
   review_approved: 6,
   merge_blocked: 7,
 };
@@ -155,8 +159,19 @@ function waitingFor(reviewers: string[]): string {
   return reviewers.length > 0 ? `waiting for review from ${names(reviewers)}` : "a required review or check is missing";
 }
 
-function joinItems(items: string[]): string {
-  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+function joinItems(items: string[], word = "and"): string {
+  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} ${word} ${items.at(-1)}`;
+}
+
+function ticketLink(ticket: JiraTicket): string {
+  return ticket.url ? link(ticket.url, escapeHtml(ticket.key)) : escapeHtml(ticket.key);
+}
+
+const italic = (text: string): string => `<i>${escapeHtml(text)}</i>`;
+
+// Where the ticket stands, for the line that says what the merge waits for.
+function ticketNow(ticket: JiraTicket): string {
+  return ticket.status === null ? "Jira status unavailable" : `now: ${italic(ticket.status)}`;
 }
 
 // The line that says whether an approved PR can be merged, and what to do first if it cannot.
@@ -172,6 +187,8 @@ function verdict(status: MergeStatus, prUrl: string): string | null {
       return "⏳ GitHub is still checking whether the branch can be merged";
     case "github_blocked":
       return `🚧 GitHub blocks the merge: ${waitingFor(status.waitingFor)}`;
+    case "waiting_jira":
+      return `🟢 <b>Review passed</b> · waiting for ${ticketLink(status.ticket)} to reach ${joinItems(status.wanted.map(italic), "or")} (${ticketNow(status.ticket)})`;
     case "todo": {
       const items: string[] = [];
       const { pendingThreads, firstPendingThreadUrl } = status;
@@ -200,9 +217,31 @@ function approvalLine(events: Approved[]): string {
   return third ? `${line}\n${third}` : line;
 }
 
+// With a ticket this follows "moved to Merge" once the blockers named back then are gone.
 function readyLine(event: ReadyToMerge): Line {
+  const ticket = event.ticket
+    ? `\n🎫 ${ticketLink(event.ticket)} is in ${italic(event.ticket.status ?? "")} · no blockers left`
+    : "";
   const stale = event.approval.staleApprovers.length > 0 ? `\n✅ Approved ${approvalCount(event.approval)}` : "";
-  return { text: `🎉 <b>Time to merge!</b>${stale}`, url: event.pr.url, events: [event] };
+  return { text: `🎉 <b>Time to merge!</b>${ticket}${stale}`, url: event.pr.url, events: [event] };
+}
+
+// The ticket reached the merge status: say what to do now, or what still stands in the way.
+function ticketInMergeLine(event: TicketInMerge): Line {
+  const { ticket, status, approval } = event;
+  const moved = `${ticketLink(ticket)} moved to ${italic(ticket.status ?? "")}`;
+  const text =
+    status.kind === "ready"
+      ? `🎉 <b>Time to merge!</b>\n🎫 ${moved}${approval.staleApprovers.length > 0 ? `\n✅ Approved ${approvalCount(approval)}` : ""}`
+      : status.kind === "unapproved"
+        ? `⚠️ ${moved}, but the PR is not approved yet · ${approvalCount(approval)}`
+        : `📌 ${moved}\n${verdict(status, event.pr.url)}`;
+  return { text, url: event.pr.url, events: [event] };
+}
+
+function reviewPassedLine(event: ReviewPassed): Line {
+  const stale = event.approval.staleApprovers.length > 0 ? `\n✅ Approved ${approvalCount(event.approval)}` : "";
+  return { text: `${verdict(event.status, event.pr.url)}${stale}`, url: event.pr.url, events: [event] };
 }
 
 function blockedLine(event: MergeBlocked): Line {
@@ -237,6 +276,10 @@ function standalone(event: NotifyEvent): Line[] {
       return [readyLine(event)];
     case "merge_blocked":
       return [blockedLine(event)];
+    case "review_passed":
+      return [reviewPassedLine(event)];
+    case "ticket_in_merge":
+      return [ticketInMergeLine(event)];
     default:
       return [];
   }

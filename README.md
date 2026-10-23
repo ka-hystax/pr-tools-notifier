@@ -21,6 +21,7 @@ Should this be disabled while the request is in flight?
 | `mine`  | a new thread waiting for you (bot threads are compact and silent), an approval with the merge verdict, changes requested, CI failed    |
 | `mine`  | 🎉 ready to merge, or 🚧 GitHub blocks the merge (for example, waiting for a code-owner team) — when it happens without a new approval |
 | `todo`  | review requested from you, a reply in a thread you started                                                                             |
+| `mine`  | with a Jira merge status (see [Waiting for Jira](#waiting-for-jira)): 🟢 review passed, then 🎉 when the ticket reaches that status    |
 
 The approval verdict uses the approval threshold from your gh-pr-tools profile. Approvals given before a rebase or a small fix (stale) still count; the message then says `Approved 2/2 (2 stale)`, and GitHub's own merge state decides whether the merge is really allowed. Your own actions, threads you answered last and review requests on drafts never notify. Approvals below the threshold and bot threads arrive without a sound.
 
@@ -70,22 +71,60 @@ pr-tools-notifier run -p PROFILE
 
 Keep it in a terminal tab or tmux. The first poll only records the current state (`first run, saved N PRs as the baseline`), so you are not flooded with old PRs.
 
+### Waiting for Jira (optional)
+
+If your team merges only after the ticket is moved to a status (a `Merge` column, say), tell the notifier which one:
+
+```bash
+pr-tools-notifier config set merge-status Merge
+```
+
+An approval that clears every blocker then says `🟢 Review passed · waiting for PRJ-1826 to reach Merge (now: In Review)` instead of 🎉. When the ticket reaches the status, the 🎉 `Time to merge!` follows. If something still blocks the PR at that moment, the message lists it instead (`📌 PRJ-1826 moved to Merge`, `🚧 Before merge resolve 2 threads…`), and once the blockers are gone a second 🎉 says `PRJ-1826 is in Merge · no blockers left`. Several statuses can be given, separated by commas; names are compared without regard to case. See [Settings](#settings).
+
+The ticket comes from gh-pr-tools, which already knows how to read Jira, so the notifier needs no credentials of its own. It takes the ticket key from the branch name (`bug/PRJ-1865`) and reads its status with the Jira token of your profile. Without one, add it once:
+
+```bash
+gh pr-tools -p PROFILE profile set jira-site yourorg
+gh pr-tools -p PROFILE profile set jira-email you@example.com
+gh pr-tools -p PROFILE profile set jira-api-token      # prompts, hidden
+```
+
+See the [Jira token](https://github.com/ek-hystax/gh-pr-tools#jira-token) section of gh-pr-tools for how to create the token. PRs whose branch has no ticket key are announced as before. Without the token, the terminal warns `no Jira status came back` and the messages say `Jira status unavailable`, since the notifier cannot know whether the ticket is ready. Restart `run` after changing a setting.
+
+### Settings
+
+Two optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Edit the file by hand or use the command:
+
+```
+pr-tools-notifier config                       show the settings and where the file is
+pr-tools-notifier config set KEY VALUE         change one (quote a value with spaces)
+pr-tools-notifier config unset KEY             remove one
+```
+
+| Key             | Value                                                                   | Default |
+| --------------- | ----------------------------------------------------------------------- | ------- |
+| `MERGE_STATUS`  | Jira statuses that mean "time to merge", comma-separated: `Merge,Ready` | none    |
+| `POLL_INTERVAL` | time between polls: `90s`, `5m`, `1h`; from `1m` to `12h`               | `1m`    |
+
+`config set` accepts the key in any case and with `-` for `_` (`merge-status`). A typo in the file stops `run` with the file and line, instead of being silently ignored. The `--interval` option of `run` overrides `POLL_INTERVAL` for one run.
+
 ## Commands
 
 ```
 pr-tools-notifier init                  set up your bot (once)
 pr-tools-notifier --version             print the version
 pr-tools-notifier status                show the bot, its check against Telegram and the saved state
-pr-tools-notifier reset [-y]            remove the saved token and state (asks first; -y skips the question)
+pr-tools-notifier config [set|unset]   show or change the settings (Jira merge status, poll interval)
+pr-tools-notifier reset [-y]            remove the saved token, settings and state (asks first; -y skips the question)
 pr-tools-notifier send-test             send sample notifications
 pr-tools-notifier run -p PROFILE        poll and notify
 
-  -p, --profile NAME     gh-pr-tools profile (required)
-      --interval 1m      time between polls: 90s, 5m, 1h (default and minimum: 1m)
-      --commands LIST    mine,todo (default: both)
-      --once             poll once and exit
-      --dry-run          print the messages instead of sending them
-      --pr-tools PATH    run this gh-pr-tools entry script instead of `gh pr-tools`
+  -p, --profile NAME        gh-pr-tools profile (required)
+      --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
+      --commands LIST       mine,todo (default: both)
+      --once                poll once and exit
+      --dry-run             print the messages instead of sending them
+      --pr-tools PATH       run this gh-pr-tools entry script instead of `gh pr-tools`
 ```
 
 `--dry-run` keeps its own state, so it never moves the baseline of a real run. Only one process may poll a given profile and command at a time; a second one stops with a message.
@@ -96,7 +135,8 @@ pr-tools-notifier run -p PROFILE        poll and notify
 - **Delivery.** The baseline moves only after Telegram accepted the messages, so a failed send repeats the same events on the next poll. Telegram `429` and `5xx` are retried.
 - **Failures.** After three polls in a row fail (an expired `gh` login, no network, a deleted profile), one `⚠️ Notifications are failing` message arrives. It explains the common causes in plain words (no connection to GitHub, a timeout, a rate limit, a `gh` login that expired, a missing profile, a gh-pr-tools too old for `--json`, Telegram refusing the bot) with what to check; anything else is shown as the raw error. The terminal always keeps the raw error. Another follows only after a successful poll.
 - **Merge state `unknown`.** GitHub sometimes answers "unknown" while it recomputes whether a PR merges cleanly. The notifier keeps the last real answer for the same commit instead of guessing, so a PR with conflicts is not announced as ready. With no earlier answer, an approval says `GitHub is still checking whether the branch can be merged`.
-- **Load.** One poll costs about 6 GitHub GraphQL points for `mine` and `todo` together. At the default 1-minute interval that is about 7% of the 5000-point hourly limit.
+- **Jira status.** A status that cannot be read for a moment (a failed lookup) keeps the last real one for the same ticket. The ticket moving back out of the merge status says `🟢 Review passed` again. Ticket and status are read from the `mine` snapshot only; `todo` is not affected.
+- **Load.** One poll costs about 6 GitHub GraphQL points for `mine` and `todo` together. At the default 1-minute interval that is about 7% of the 5000-point hourly limit; a longer `POLL_INTERVAL` lowers it.
 - **Format changes.** A state file written by another version is set aside as `*.corrupt` and the next poll starts a fresh baseline silently.
 
 ## Where things are stored
@@ -107,6 +147,7 @@ pr-tools-notifier run -p PROFILE        poll and notify
 | ---------------------------- | ---------------------------------------------- |
 | `config.json`                | bot username, chat id, the encrypted token     |
 | `secret.key`                 | the key for the token (AES-256-GCM, mode 0600) |
+| `settings.env`               | your settings, see [Settings](#settings)       |
 | `state/<profile>-<cmd>.json` | the last snapshot, used as the baseline        |
 
 The key sits next to the token, so the token stays out of backups, synced dotfiles and greps, but not from someone who can read the whole directory. Revoke a leaked token with `/revoke` in @BotFather and run `init` again. To remove everything, delete the directory.
@@ -117,7 +158,7 @@ The key sits next to the token, so the token stays out of backups, synced dotfil
 - **Deleted profile or logged-out `gh`.** A profile name that does not exist, or a gh-pr-tools too old for `--json`, stops `run` at once when it shows up on the first poll. Later, every poll fails. After three, one `⚠️` message arrives with the reason and what to check (for example `gh pr-tools profile list`); then Telegram stays quiet until a poll succeeds, while the terminal keeps logging each failure. The state is kept, so restoring the profile for the same repo continues where it stopped.
 - **Dead bot.** `pr-tools-notifier status` checks the token against Telegram. `run` does the same at start and stops with `getMe: 401 …` if Telegram rejects it. A token that dies later, or a bot you blocked, shows up in the terminal as `delivery: … 401` or `403` (Telegram cannot carry that alert). The events are kept and arrive after the fix: unblock the bot and press Start, or, for a deleted or revoked bot, stop `run`, run `pr-tools-notifier init` with a new token and start `run` again.
 - **Removing everything.** Check what exists with `pr-tools-notifier status` (bot, last poll per profile, whether a `run` is active). `pr-tools-notifier reset` deletes `~/.config/pr-tools-notifier/` after asking (`-y` skips the question) and refuses while `run` is active. gh-pr-tools settings are not touched. The bot stays in Telegram until you send `/deletebot` (or `/revoke` for the token only) to @BotFather. To drop the command too, run `npm unlink -g pr-tools-notifier` (pnpm: `pnpm remove -g pr-tools-notifier`) and delete the clone.
-- **Starting from scratch**, for a demo or a clean install: `reset`, then `init`, `send-test` and `run -p PROFILE`. If you share your screen, the token is visible in the BotFather chat, so revoke it afterwards.
+- **Starting from scratch**, for a demo or a clean install: `reset` (it drops your settings too), then `init`, `send-test` and `run -p PROFILE`. If you share your screen, the token is visible in the BotFather chat, so revoke it afterwards.
 
 ## Development
 

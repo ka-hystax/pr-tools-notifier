@@ -44,8 +44,16 @@ function setup() {
     },
     async alert() {},
   };
-  const tick = (commands: Command[] = ["mine", "todo"], timeZone?: string) =>
-    runTick({ commands, source, stores, sink, log, ...(timeZone ? { timeZone } : {}) });
+  const tick = (commands: Command[] = ["mine", "todo"], timeZone?: string, mergeStatuses?: string[]) =>
+    runTick({
+      commands,
+      source,
+      stores,
+      sink,
+      log,
+      ...(timeZone ? { timeZone } : {}),
+      ...(mergeStatuses ? { mergeStatuses } : {}),
+    });
   return { stores, state, delivered, logs, failures, tick };
 }
 
@@ -195,5 +203,62 @@ describe("runTick", () => {
     const h = setup();
     await h.tick(["mine"]);
     expect(h.stores.todo.load().baseline).toBeNull();
+  });
+});
+
+describe("runTick with a Jira merge gate", () => {
+  const tickets = (s: MineSnapshot, status: string | null) => {
+    for (const pr of s.prs) pr.jira = pr.number === 102 ? { key: "PRJ-1002", url: null, status } : null;
+  };
+  const approveAndClear = (s: MineSnapshot) => {
+    approve(s, 102, "PRR_OK");
+    const pr = s.prs.find((p) => p.number === 102)!;
+    pr.approval = { ...pr.approval, approvers: ["alice", "carol"], decision: "approved" };
+  };
+
+  test("holds the merge announcement until the ticket reaches the status, then announces it", async () => {
+    const h = setup();
+    tickets(h.state.mine, "In Review");
+    await h.tick(["mine"], undefined, ["Merge"]);
+
+    approveAndClear(h.state.mine);
+    await h.tick(["mine"], undefined, ["Merge"]);
+    expect(texts(h.delivered)).toHaveLength(1);
+    expect(texts(h.delivered)[0]).toContain("Review passed");
+    expect(texts(h.delivered)[0]).not.toContain("Time to merge");
+
+    tickets(h.state.mine, "Merge");
+    await h.tick(["mine"], undefined, ["Merge"]);
+    expect(texts(h.delivered)).toHaveLength(2);
+    expect(texts(h.delivered)[1]).toContain("Time to merge");
+    expect(texts(h.delivered)[1]).toContain("moved to <i>Merge</i>");
+
+    await h.tick(["mine"], undefined, ["Merge"]);
+    expect(h.delivered).toHaveLength(2);
+  });
+
+  test("ignores the tickets without a gate", async () => {
+    const h = setup();
+    tickets(h.state.mine, "In Review");
+    await h.tick(["mine"]);
+    approveAndClear(h.state.mine);
+    await h.tick(["mine"]);
+    expect(texts(h.delivered)[0]).toContain("Time to merge");
+  });
+
+  test("warns in the terminal when no ticket status comes back at all", async () => {
+    const h = setup();
+    tickets(h.state.mine, null);
+    await h.tick(["mine"], undefined, ["Merge"]);
+    expect(h.logs.some((l) => l.startsWith("warn: mine: no Jira status came back"))).toBe(true);
+  });
+
+  test("does not warn when some status is known or there is no ticket", async () => {
+    const h = setup();
+    tickets(h.state.mine, "In Review");
+    await h.tick(["mine"], undefined, ["Merge"]);
+    for (const pr of h.state.mine.prs) pr.jira = null;
+    await h.tick(["mine"], undefined, ["Merge"]);
+    expect(h.logs.filter((l) => l.includes("no Jira status"))).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { parseSnapshot, type MineSnapshot, type Thread } from "../../contract/snapshot.js";
-import type { MergeStatus, NotifyEvent, PrRef } from "../../diff/diff.js";
+import { parseSnapshot, type JiraTicket, type MineSnapshot, type Thread } from "../../contract/snapshot.js";
+import type { MergeStatus, NotifyEvent, PrRef, WaitingJira } from "../../diff/diff.js";
 import { escapeHtml, formatEvents, MAX_MESSAGE_LENGTH, type FormatOptions, type OutMessage } from "../format.js";
 import { readFixture } from "../../__tests__/fixtures.js";
 
@@ -374,6 +374,104 @@ describe("merge events", () => {
   test("ranks them after the other events of the PR", () => {
     const [text] = fmt([blocked([]), approved(), pending(), readyEvent]);
     const order = ["💬", "🎉", "✅", "🚧 All set"].map((marker) => text!.indexOf(marker));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order.every((i) => i >= 0)).toBe(true);
+  });
+});
+
+describe("Jira merge gate", () => {
+  const met = { ...pr.approval, approvers: ["alice", "carol"], staleApprovers: [], decision: "approved" as const };
+  const ticket = (over: Partial<JiraTicket> = {}): JiraTicket => ({
+    key: "PRJ-1001",
+    url: "https://jira.example.com/browse/PRJ-1001",
+    status: "In Review",
+    ...over,
+  });
+  const waiting = (over: Partial<JiraTicket> = {}, wanted = ["Merge"]): WaitingJira => ({
+    kind: "waiting_jira",
+    ticket: ticket(over),
+    wanted,
+  });
+  const passed = (status = waiting(), approval: object = {}): NotifyEvent => ({
+    kind: "review_passed",
+    pr: ref(),
+    approval: { ...met, ...approval },
+    status,
+  });
+  const inMerge = (status: MergeStatus, over: Partial<JiraTicket> = {}): NotifyEvent => ({
+    kind: "ticket_in_merge",
+    pr: ref(),
+    approval: met,
+    ticket: ticket({ status: "Merge", ...over }),
+    status,
+  });
+
+  test("an approval that passes the review says what the merge waits for, linking the ticket", () => {
+    const [text] = fmt([approved("carol", met, waiting())]);
+    expect(text).toContain("✅ <b>carol</b> approved · 2/2\n");
+    expect(text).toContain(
+      '🟢 <b>Review passed</b> · waiting for <a href="https://jira.example.com/browse/PRJ-1001">PRJ-1001</a> to reach <i>Merge</i> (now: <i>In Review</i>)'
+    );
+  });
+
+  test("names every status that would do, and says when the status is unknown", () => {
+    expect(fmt([passed(waiting({}, ["Merge", "Ready to merge"]))])[0]).toContain(
+      "to reach <i>Merge</i> or <i>Ready to merge</i> ("
+    );
+    expect(fmt([passed(waiting({ status: null }))])[0]).toContain("(Jira status unavailable)");
+  });
+
+  test("shows the bare key when there is no Jira site, and escapes the status", () => {
+    const [text] = fmt([passed(waiting({ url: null, status: "<b>x</b> & y" }))]);
+    expect(text).toContain("waiting for PRJ-1001 to reach");
+    expect(text).toContain("now: <i>&lt;b&gt;x&lt;/b&gt; &amp; y</i>");
+    expect(balanced(text!)).toBe(true);
+  });
+
+  test("review passed leads with the verdict and keeps the stale count", () => {
+    expect(fmt([passed()])[0]).toMatch(/^🟢 <b>Review passed<\/b> · waiting for .*\n<a href=/);
+    expect(
+      fmt([passed(waiting(), { approvers: [], staleApprovers: ["alice", "carol"], decision: "approved_stale" })])[0]
+    ).toContain("\n✅ Approved 2/2 (2 stale)\n");
+    expect(formatEvents([passed()])[0]!.silent).toBe(false);
+  });
+
+  test("blockers clearing after the ticket reached the merge status repeat the all-clear with the ticket", () => {
+    const event: NotifyEvent = { kind: "ready_to_merge", pr: ref(), approval: met, ticket: ticket({ status: "Merge" }) };
+    expect(fmt([event])[0]).toMatch(
+      /^🎉 <b>Time to merge!<\/b>\n🎫 <a href="[^"]+">PRJ-1001<\/a> is in <i>Merge<\/i> · no blockers left\n<a href=/
+    );
+  });
+
+  test("the ticket reaching the merge status says it is time to merge", () => {
+    const [text] = fmt([inMerge(ready)]);
+    expect(text).toMatch(/^🎉 <b>Time to merge!<\/b>\n🎫 <a href="[^"]+">PRJ-1001<\/a> moved to <i>Merge<\/i>\n<a href=/);
+    expect(formatEvents([inMerge(ready)])[0]!.silent).toBe(false);
+  });
+
+  test("the ticket reaching the merge status lists what still blocks the PR", () => {
+    const todo: MergeStatus = {
+      kind: "todo",
+      pendingThreads: 2,
+      firstPendingThreadUrl: THREAD_URL,
+      ciFailed: false,
+      needsRebase: true,
+    };
+    expect(fmt([inMerge(todo)])[0]).toContain("📌 <a");
+    expect(fmt([inMerge(todo)])[0]).toContain("moved to <i>Merge</i>\n🚧 Before merge resolve ");
+    expect(fmt([inMerge({ kind: "waiting_ci" })])[0]).toContain("\n⏳ Waiting for CI to finish\n");
+  });
+
+  test("the ticket reaching the merge status of a PR without enough approvals warns", () => {
+    const event = { ...inMerge({ kind: "unapproved" }), approval: pr.approval } as NotifyEvent;
+    expect(fmt([event])[0]).toMatch(
+      /^⚠️ <a [^>]+>PRJ-1001<\/a> moved to <i>Merge<\/i>, but the PR is not approved yet · 1\/2\n/
+    );
+  });
+
+  test("ranks after the other events of the PR, like the merge verdicts", () => {
+    const [text] = fmt([passed(), pending(), inMerge(ready)]);
+    const order = ["💬", "🎉", "🟢"].map((marker) => text!.indexOf(marker));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order.every((i) => i >= 0)).toBe(true);
   });

@@ -36,6 +36,10 @@ describe("explainFailure", () => {
       "This gh-pr-tools is too old: it does not know <code>--json</code>.",
     ],
     ["mine: output is not valid JSON", "gh-pr-tools returned data the notifier cannot read."],
+    [
+      "mine: gh-pr-tools does not report Jira tickets (needed for MERGE_STATUS)",
+      "This gh-pr-tools is too old: it does not report Jira tickets.",
+    ],
   ])("explains %j", (error, summary) => {
     expect(summaryOf(error)).toBe(summary);
   });

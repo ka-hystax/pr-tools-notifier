@@ -18,6 +18,10 @@ export interface GhOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   exec?: Exec;
+  // `mine` must report the ticket of each PR: a gh-pr-tools that does not is too old for the Jira merge status.
+  jiraRequired?: boolean;
+  // gh-pr-tools prints a line on stderr when it cannot do something (a rejected Jira token); the exit code stays 0.
+  onWarning?: (line: string) => void;
 }
 
 const defaultExec = promisify(execFile) as unknown as Exec;
@@ -39,7 +43,15 @@ function describeFailure(err: unknown, file: string, timeoutMs: number): string 
 }
 
 // Runs `gh pr-tools -p PROFILE <command> --json` (or a checkout's entry script) and validates the document.
-export function ghSource({ profile, prToolsPath, signal, timeoutMs = 120_000, exec = defaultExec }: GhOptions): SnapshotSource {
+export function ghSource({
+  profile,
+  prToolsPath,
+  signal,
+  timeoutMs = 120_000,
+  exec = defaultExec,
+  jiraRequired = false,
+  onWarning,
+}: GhOptions): SnapshotSource {
   const file = prToolsPath ?? "gh";
   const prefix = prToolsPath ? [] : ["pr-tools"];
   return async (command) => {
@@ -47,11 +59,13 @@ export function ghSource({ profile, prToolsPath, signal, timeoutMs = 120_000, ex
     if (signal) options.signal = signal;
 
     let stdout: string;
+    let stderr: string;
     try {
-      ({ stdout } = await exec(file, [...prefix, "-p", profile, command, "--json"], options));
+      ({ stdout, stderr } = await exec(file, [...prefix, "-p", profile, command, "--json"], options));
     } catch (err) {
       throw new Error(describeFailure(err, file, timeoutMs));
     }
+    for (const line of stderr.split("\n")) if (line.trim() !== "") onWarning?.(line.trim());
 
     let raw: unknown;
     try {
@@ -62,6 +76,9 @@ export function ghSource({ profile, prToolsPath, signal, timeoutMs = 120_000, ex
     try {
       const snapshot = parseSnapshot(raw);
       if (snapshot.command !== command) throw new Error(`expected a ${command} snapshot, got ${snapshot.command}`);
+      if (jiraRequired && snapshot.command === "mine" && snapshot.prs.some((pr) => pr.jira === undefined)) {
+        throw new Error("gh-pr-tools does not report Jira tickets (needed for MERGE_STATUS)");
+      }
       return snapshot;
     } catch (err) {
       throw new Error(errorMessage(err));

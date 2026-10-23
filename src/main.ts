@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { parseCli, UsageError, USAGE } from "./cli/args.js";
 import { createPrompter } from "./cli/prompt.js";
 import { readVersion } from "./cli/version.js";
+import { runConfig } from "./commands/config.js";
 import { runInit } from "./commands/init.js";
 import { runReset } from "./commands/reset.js";
 import { runCommand } from "./commands/run.js";
@@ -10,6 +11,7 @@ import { runStatus } from "./commands/status.js";
 import { checkBot, NOT_CONFIGURED, telegramSink } from "./commands/sinks.js";
 import { ConfigStore } from "./config/config.js";
 import { configDir, stateDir } from "./config/paths.js";
+import { SettingsError, SettingsStore } from "./config/settings.js";
 import { activeLocks } from "./state/lock.js";
 import { TelegramApi } from "./telegram/api.js";
 
@@ -65,11 +67,16 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  if (parsed.kind === "config") {
+    return runConfig(new SettingsStore(configDir()), parsed.action, (line) => console.log(line)) ? 0 : 1;
+  }
+
   if (parsed.kind === "status") {
     const state = stateDir();
     const healthy = await runStatus({
       config,
       stateDir: state,
+      settings: new SettingsStore(configDir()),
       check: (token) => checkBot(new TelegramApi({ token })),
       activeLocks: () => activeLocks(state),
       out: (line) => console.log(line),
@@ -87,5 +94,13 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  return runCommand(parsed.config, config);
+  let settings;
+  try {
+    settings = new SettingsStore(configDir()).load();
+  } catch (err) {
+    if (!(err instanceof SettingsError)) throw err;
+    console.error(`pr-tools-notifier: ${err.message}`);
+    return 1;
+  }
+  return runCommand(parsed.config, config, settings);
 }

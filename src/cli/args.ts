@@ -1,4 +1,6 @@
 import { parseArgs } from "node:util";
+import { MAX_INTERVAL_MS, MIN_INTERVAL_MS, readInterval } from "../config/interval.js";
+import type { ConfigAction } from "../commands/config.js";
 import type { Command } from "../runner/types.js";
 
 export class UsageError extends Error {}
@@ -8,25 +10,27 @@ export const USAGE = `usage: pr-tools-notifier <command>
 commands:
   init                   set up your own Telegram bot (once)
   status                 show the bot, its check against Telegram and the saved state
-  reset [-y]             remove the saved bot token and state (asks first; -y skips the question)
+  config                 show the settings (merge statuses, poll interval)
+  config set KEY VALUE   change a setting; config unset KEY removes it
+  reset [-y]             remove the saved bot token, settings and state (asks first; -y skips the question)
   send-test              send sample notifications to check the setup
   run -p PROFILE         poll gh-pr-tools and send notifications
 
 options of run:
-  -p, --profile NAME     gh-pr-tools profile to use (required)
-      --dry-run          print the messages instead of sending them
-      --once             run a single poll and exit
-      --interval 1m      time between polls: 90s, 5m, 1h (default and minimum: 1m)
-      --commands LIST    comma-separated: mine,todo (default: both)
-      --pr-tools PATH    run this gh-pr-tools entry script instead of \`gh pr-tools\`
-  -v, --version          print the version
-  -h, --help             show this help`;
+  -p, --profile NAME        gh-pr-tools profile to use (required)
+      --dry-run             print the messages instead of sending them
+      --once                run a single poll and exit
+      --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
+      --commands LIST       comma-separated: mine,todo (default: both)
+      --pr-tools PATH       run this gh-pr-tools entry script instead of \`gh pr-tools\`
+  -v, --version             print the version
+  -h, --help                show this help`;
 
 export interface RunConfig {
   profile: string;
   dryRun: boolean;
   once: boolean;
-  intervalMs: number;
+  intervalMs?: number; // absent: the setting POLL_INTERVAL, or one minute
   commands: Command[];
   prToolsPath?: string;
 }
@@ -38,17 +42,18 @@ export type Parsed =
   | { kind: "send-test" }
   | { kind: "status" }
   | { kind: "reset"; yes: boolean }
+  | { kind: "config"; action: ConfigAction }
   | { kind: "run"; config: RunConfig };
 
-const MIN_INTERVAL_MS = 60_000;
-const UNITS: Record<string, number> = { "": 1_000, s: 1_000, m: 60_000, h: 3_600_000 };
-
 export function parseInterval(text: string): number {
-  const match = /^(\d+)([smh]?)$/.exec(text.trim());
-  if (!match) throw new UsageError(`invalid --interval '${text}' (use e.g. 90s, 5m or 1h)`);
-  const ms = Number(match[1]) * UNITS[match[2]!]!;
-  if (ms < MIN_INTERVAL_MS) throw new UsageError("--interval must be at least 1m");
-  return ms;
+  const result = readInterval(text);
+  if ("ms" in result) return result.ms;
+  if (result.error === "format") throw new UsageError(`invalid --interval '${text}' (use e.g. 90s, 5m or 1h)`);
+  throw new UsageError(
+    result.error === "min"
+      ? `--interval must be at least ${MIN_INTERVAL_MS / 60_000}m`
+      : `--interval must be at most ${MAX_INTERVAL_MS / 3_600_000}h`
+  );
 }
 
 export function parseCommands(text: string): Command[] {
@@ -58,6 +63,22 @@ export function parseCommands(text: string): Command[] {
     if (!commands.includes(part)) commands.push(part);
   }
   return commands;
+}
+
+function parseConfigAction(args: string[]): ConfigAction {
+  const [action, key, value, ...extra] = args;
+  if (action === undefined) return { type: "show" };
+  if (action === "set") {
+    if (key === undefined || value === undefined)
+      throw new UsageError("usage: config set KEY VALUE (quote a value with spaces)");
+    if (extra.length > 0) throw new UsageError(`unexpected argument '${extra[0]}' (quote a value with spaces)`);
+    return { type: "set", key, value };
+  }
+  if (action === "unset") {
+    if (key === undefined || value !== undefined) throw new UsageError("usage: config unset KEY");
+    return { type: "unset", key };
+  }
+  throw new UsageError(`unknown config action '${action}' (use set or unset)`);
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -85,6 +106,7 @@ export function parseCli(argv: string[]): Parsed {
 
   if (values.version) return { kind: "version" };
   if (values.help || positionals.length === 0) return { kind: "help" };
+  if (positionals[0] === "config") return { kind: "config", action: parseConfigAction(positionals.slice(1)) };
   if (positionals.length > 1) throw new UsageError(`unexpected argument '${positionals[1]}'`);
   if (values.yes && positionals[0] !== "reset") throw new UsageError("--yes is only for reset");
   if (positionals[0] === "reset") return { kind: "reset", yes: values.yes ?? false };
@@ -97,9 +119,9 @@ export function parseCli(argv: string[]): Parsed {
     profile: values.profile,
     dryRun: values["dry-run"] ?? false,
     once: values.once ?? false,
-    intervalMs: parseInterval(values.interval ?? "1m"),
     commands: parseCommands(values.commands ?? "mine,todo"),
   };
+  if (values.interval !== undefined) config.intervalMs = parseInterval(values.interval);
   if (values["pr-tools"]) config.prToolsPath = values["pr-tools"];
   return { kind: "run", config };
 }

@@ -1,4 +1,5 @@
-import { computeEvents, type Baseline, type NotifyEvent } from "../diff/diff.js";
+import type { Snapshot } from "../contract/snapshot.js";
+import { computeEvents, type Baseline, type MergeGate, type NotifyEvent } from "../diff/diff.js";
 import { formatEvents, type FormatOptions, type OutMessage } from "../format/format.js";
 import type { StateStore } from "../state/store.js";
 import { botHint } from "../telegram/hints.js";
@@ -11,10 +12,19 @@ export interface TickDeps {
   sink: Sink;
   log: Logger;
   timeZone?: string;
+  mergeStatuses?: string[];
+}
+
+// Tickets exist but Jira told gh-pr-tools nothing about any of them: no token, or every lookup failed.
+function noTicketStatus(snapshot: Snapshot): boolean {
+  if (snapshot.command !== "mine") return false;
+  const tickets = snapshot.prs.flatMap((pr) => (pr.jira ? [pr.jira] : []));
+  return tickets.length > 0 && tickets.every((t) => t.status === null);
 }
 
 // Baselines move only after the messages were delivered, so a failed tick repeats the same events.
-export async function runTick({ commands, source, stores, sink, log, timeZone }: TickDeps): Promise<TickResult> {
+export async function runTick({ commands, source, stores, sink, log, timeZone, mergeStatuses }: TickDeps): Promise<TickResult> {
+  const gate: MergeGate | undefined = mergeStatuses ? { statuses: mergeStatuses } : undefined;
   const errors: string[] = [];
   const events: NotifyEvent[] = [];
   const commits: { command: Command; store: StateStore; next: Baseline }[] = [];
@@ -27,7 +37,12 @@ export async function runTick({ commands, source, stores, sink, log, timeZone }:
       const store = stores[command];
       const { baseline, reset } = store.load();
       if (reset) log.warn(`${command}: ${reset}`);
-      const result = computeEvents(baseline, curr);
+      if (gate && noTicketStatus(curr)) {
+        log.warn(
+          `${command}: no Jira status came back, so "Time to merge" keeps waiting (check the Jira token: \`gh pr-tools profile show\`)`
+        );
+      }
+      const result = computeEvents(baseline, curr, command === "mine" ? gate : undefined);
       log.info(
         baseline === null
           ? `${command}: first run, saved ${curr.prs.length} PRs as the baseline`

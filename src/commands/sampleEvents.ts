@@ -1,5 +1,5 @@
-import type { Approval, Thread } from "../contract/snapshot.js";
-import type { MergeStatus, NotifyEvent, PrRef } from "../diff/diff.js";
+import type { Approval, JiraTicket, Thread } from "../contract/snapshot.js";
+import type { MergeStatus, NotifyEvent, PrRef, WaitingJira } from "../diff/diff.js";
 
 const repo = "acme/web";
 
@@ -49,6 +49,18 @@ const todo = (over: Partial<Extract<MergeStatus, { kind: "todo" }>>): MergeStatu
   needsRebase: false,
   ...over,
 });
+
+const ticket = (status: string, key = "PRJ-1001"): JiraTicket => ({
+  key,
+  url: `https://jira.example.com/browse/${key}`,
+  status,
+});
+const waitingJira = (status: string, key?: string): WaitingJira => ({
+  kind: "waiting_jira",
+  ticket: ticket(status, key),
+  wanted: ["Merge"],
+});
+const twoApprovals = approval({ approvers: ["alice", "carol"], decision: "approved" });
 
 const P101 = pr(101, "PRJ-1001. Add export button");
 const P102 = pr(102, "PRJ-1002. Fix locale fallback");
@@ -137,6 +149,62 @@ export const SAMPLE_MESSAGES: { label: string; events: NotifyEvent[] }[] = [
     ],
   },
   { label: "all set, but GitHub blocks the merge", events: [{ kind: "merge_blocked", pr: P102, waitingFor: ["backend"] }] },
+  {
+    label: "approved, review passed, the ticket is not in the merge status yet",
+    events: [
+      {
+        kind: "review_approved",
+        pr: P101,
+        review: review("R4", "carol", "APPROVED"),
+        approval: twoApprovals,
+        status: waitingJira("In Review"),
+      },
+    ],
+  },
+  {
+    label: "blockers cleared, review passed, waiting for the ticket",
+    events: [{ kind: "review_passed", pr: P102, approval: twoApprovals, status: waitingJira("Approved", "PRJ-1002") }],
+  },
+  {
+    label: "the ticket moved to the merge status",
+    events: [
+      {
+        kind: "ticket_in_merge",
+        pr: P102,
+        approval: twoApprovals,
+        ticket: ticket("Merge", "PRJ-1002"),
+        status: { kind: "ready" },
+      },
+    ],
+  },
+  {
+    label: "the ticket moved to the merge status, threads still pending",
+    events: [
+      {
+        kind: "ticket_in_merge",
+        pr: P101,
+        approval: twoApprovals,
+        ticket: ticket("Merge"),
+        status: todo({ pendingThreads: 2, firstPendingThreadUrl: threadsUrl, needsRebase: true }),
+      },
+    ],
+  },
+  {
+    label: "blockers cleared after the ticket had moved to the merge status",
+    events: [{ kind: "ready_to_merge", pr: P101, approval: twoApprovals, ticket: ticket("Merge") }],
+  },
+  {
+    label: "the ticket moved to the merge status, the PR is not approved yet",
+    events: [
+      {
+        kind: "ticket_in_merge",
+        pr: P201,
+        approval: approval(),
+        ticket: ticket("Merge", "PRJ-2001"),
+        status: { kind: "unapproved" },
+      },
+    ],
+  },
   {
     label: "changes requested",
     events: [

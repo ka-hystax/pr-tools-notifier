@@ -19,6 +19,10 @@ export const sleep: Sleep = (ms, signal) =>
 const SETUP_ERRORS: [RegExp, string][] = [
   [/unknown profile/i, "stopping: that gh-pr-tools profile does not exist (see `gh pr-tools profile list`)"],
   [/unknown option '--json'/i, "stopping: this gh-pr-tools is too old, update it with `gh extension upgrade pr-tools`"],
+  [
+    /does not report Jira tickets/i,
+    "stopping: this gh-pr-tools is too old for the Jira merge status, update it with `gh extension upgrade pr-tools`",
+  ],
 ];
 
 export interface LoopDeps {

@@ -15,6 +15,12 @@ describe("parseInterval", () => {
     expect(() => parseInterval(text)).toThrow(UsageError);
   });
 
+  test("refuses anything over twelve hours", () => {
+    expect(() => parseInterval("13h")).toThrow(/at most 12h/);
+    expect(() => parseInterval("43201")).toThrow(/at most 12h/);
+    expect(parseInterval("720m")).toBe(43_200_000);
+  });
+
   test("refuses anything under a minute", () => {
     expect(() => parseInterval("30s")).toThrow(/at least 1m/);
     expect(() => parseInterval("0")).toThrow(/at least 1m/);
@@ -36,7 +42,7 @@ describe("parseCli", () => {
   test("applies the defaults", () => {
     expect(parseCli(["run", "-p", "work"])).toEqual({
       kind: "run",
-      config: { profile: "work", dryRun: false, once: false, intervalMs: 60_000, commands: ["mine", "todo"] },
+      config: { profile: "work", dryRun: false, once: false, commands: ["mine", "todo"] },
     });
   });
 
@@ -65,6 +71,38 @@ describe("parseCli", () => {
         prToolsPath: "/x/gh-pr-tools",
       },
     });
+  });
+
+  test("leaves the interval to the settings unless --interval is given", () => {
+    expect(parseCli(["run", "-p", "work"])).not.toHaveProperty("config.intervalMs");
+    expect(parseCli(["run", "-p", "work", "--interval", "12h"])).toMatchObject({ config: { intervalMs: 43_200_000 } });
+  });
+
+  test("reads the config command and its actions", () => {
+    expect(parseCli(["config"])).toEqual({ kind: "config", action: { type: "show" } });
+    expect(parseCli(["config", "set", "merge-status", "Merge, Ready to merge"])).toEqual({
+      kind: "config",
+      action: { type: "set", key: "merge-status", value: "Merge, Ready to merge" },
+    });
+    expect(parseCli(["config", "unset", "POLL_INTERVAL"])).toEqual({
+      kind: "config",
+      action: { type: "unset", key: "POLL_INTERVAL" },
+    });
+  });
+
+  test.each([
+    [["config", "set"], /usage: config set/],
+    [["config", "set", "merge-status"], /usage: config set/],
+    [["config", "set", "merge-status", "Ready", "to", "merge"], /unexpected argument 'to'/],
+    [["config", "unset"], /usage: config unset/],
+    [["config", "unset", "a", "b"], /usage: config unset/],
+    [["config", "get"], /unknown config action 'get'/],
+  ])("rejects %j", (argv, message) => {
+    expect(() => parseCli(argv)).toThrow(message);
+  });
+
+  test("no longer knows --merge-status: the Jira status lives in the settings", () => {
+    expect(() => parseCli(["run", "-p", "work", "--merge-status", "Merge"])).toThrow(UsageError);
   });
 
   test("shows help for no arguments or --help", () => {

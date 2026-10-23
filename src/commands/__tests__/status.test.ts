@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { parseSnapshot } from "../../contract/snapshot.js";
 import { ConfigStore } from "../../config/config.js";
+import { SettingsStore } from "../../config/settings.js";
 import { StateStore } from "../../state/store.js";
 import { readFixture as fixture } from "../../__tests__/fixtures.js";
 import { runStatus } from "../status.js";
@@ -31,6 +32,7 @@ async function status(check: BotCheck = { status: "ok" }, locks: string[] = []) 
   const healthy = await runStatus({
     config,
     stateDir: state,
+    settings: new SettingsStore(join(root, "cfg")),
     check: async (token) => {
       tokens.push(token);
       return check;
@@ -83,5 +85,25 @@ describe("runStatus", () => {
   test("says when there is no state yet", async () => {
     config.save({ botUsername: "my_bot", chatId: "42", token: TOKEN });
     expect((await status()).out).toContain("State:   none yet");
+  });
+
+  test("shows the settings: the Jira merge status and the poll interval", async () => {
+    mkdirSync(join(root, "cfg"), { recursive: true });
+    writeFileSync(join(root, "cfg", "settings.env"), "MERGE_STATUS=Merge,Ready\nPOLL_INTERVAL=5m\n");
+    const r = await status();
+    expect(r.out).toContain("settings.env: merge status Merge, Ready, poll every 300s");
+  });
+
+  test("shows the defaults without a settings file", async () => {
+    expect((await status()).out).toContain("no Jira merge status, default poll interval");
+  });
+
+  test("calls a broken settings file unhealthy, since run would refuse it", async () => {
+    mkdirSync(join(root, "cfg"), { recursive: true });
+    writeFileSync(join(root, "cfg", "settings.env"), "POLL_INTERVAL=1s\n");
+    new ConfigStore(join(root, "cfg")).save({ botUsername: "demo_bot", chatId: "1", token: TOKEN });
+    const r = await status();
+    expect(r.out).toContain("POLL_INTERVAL must be at least 1m");
+    expect(r.healthy).toBe(false);
   });
 });

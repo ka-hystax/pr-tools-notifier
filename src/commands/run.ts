@@ -2,7 +2,9 @@ import { join } from "node:path";
 import type { RunConfig } from "../cli/args.js";
 import { createLogger } from "../cli/logger.js";
 import type { ConfigStore } from "../config/config.js";
+import { DEFAULT_INTERVAL_MS } from "../config/interval.js";
 import { stateDir } from "../config/paths.js";
+import type { Settings } from "../config/settings.js";
 import { DryRunSink } from "../runner/dryRun.js";
 import { runLoop } from "../runner/loop.js";
 import { FailureMonitor } from "../runner/monitor.js";
@@ -12,9 +14,16 @@ import { LockError, type Lock } from "../state/lock.js";
 import { StateStore } from "../state/store.js";
 import { checkBot, NOT_CONFIGURED, telegramBot } from "./sinks.js";
 
+// The flag wins over the setting, which wins over the default.
+export function pollInterval(options: Pick<RunConfig, "intervalMs">, settings: Settings): number {
+  return options.intervalMs ?? settings.intervalMs ?? DEFAULT_INTERVAL_MS;
+}
+
 // Resolves to the process exit code.
-export async function runCommand(options: RunConfig, config: ConfigStore): Promise<number> {
-  const { profile, dryRun, once, intervalMs, commands, prToolsPath } = options;
+export async function runCommand(options: RunConfig, config: ConfigStore, settings: Settings = {}): Promise<number> {
+  const { profile, dryRun, once, commands, prToolsPath } = options;
+  const intervalMs = pollInterval(options, settings);
+  const mergeStatuses = commands.includes("mine") ? settings.mergeStatuses : undefined;
   const controller = new AbortController();
   const bot = dryRun ? null : telegramBot(config, controller.signal);
   if (!dryRun && !bot) {
@@ -49,13 +58,21 @@ export async function runCommand(options: RunConfig, config: ConfigStore): Promi
   process.once("SIGTERM", stop);
 
   try {
-    const source = ghSource({ profile, signal: controller.signal, ...(prToolsPath ? { prToolsPath } : {}) });
+    const source = ghSource({
+      profile,
+      signal: controller.signal,
+      onWarning: (line) => log.warn(line),
+      ...(prToolsPath ? { prToolsPath } : {}),
+      ...(mergeStatuses ? { jiraRequired: true } : {}),
+    });
     const mode = dryRun ? "dry run" : "sending to Telegram";
     log.info(
       `profile ${profile}: ${commands.join(" + ")}${once ? ", one poll" : `, every ${Math.round(intervalMs / 1000)}s`}, ${mode}`
     );
+    if (mergeStatuses)
+      log.info(`"Time to merge" waits for the Jira status: ${mergeStatuses.join(", ")} (MERGE_STATUS in settings)`);
     const ok = await runLoop({
-      tick: () => runTick({ commands, source, stores, sink, log }),
+      tick: () => runTick({ commands, source, stores, sink, log, ...(mergeStatuses ? { mergeStatuses } : {}) }),
       sink,
       monitor: new FailureMonitor(),
       log,

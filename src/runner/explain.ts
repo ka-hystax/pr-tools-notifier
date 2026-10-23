@@ -39,6 +39,13 @@ const RULES: [RegExp, (match: RegExpExecArray) => Explained][] = [
     }),
   ],
   [
+    /does not report Jira tickets/i,
+    () => ({
+      summary: "This gh-pr-tools is too old: it does not report Jira tickets.",
+      hint: "Update it with <code>gh extension upgrade pr-tools</code>.",
+    }),
+  ],
+  [
     /unknown profile '([^']+)'/i,
     (m) => ({
       summary: `The gh-pr-tools profile <b>${escapeHtml(m[1]!)}</b> does not exist.`,

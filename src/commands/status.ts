@@ -1,11 +1,13 @@
 import { join } from "node:path";
 import { ConfigError, type ConfigStore } from "../config/config.js";
+import { SettingsError, type SettingsStore } from "../config/settings.js";
 import { describeStates } from "../state/store.js";
 import type { BotCheck } from "./sinks.js";
 
 export interface StatusDeps {
   config: ConfigStore;
   stateDir: string;
+  settings?: SettingsStore;
   check: (token: string) => Promise<BotCheck>;
   activeLocks: () => string[];
   out: (line: string) => void;
@@ -25,6 +27,7 @@ function age(from: Date, to: Date): string {
 export async function runStatus({
   config,
   stateDir,
+  settings,
   check,
   activeLocks,
   out,
@@ -51,6 +54,19 @@ export async function runStatus({
     }
   } catch (err) {
     out(`Bot:     ${err instanceof ConfigError ? err.message : String(err)}`);
+  }
+
+  if (settings) {
+    try {
+      const { mergeStatuses, intervalMs } = settings.load();
+      const merge = mergeStatuses ? `merge status ${mergeStatuses.join(", ")}` : "no Jira merge status";
+      const poll = intervalMs ? `poll every ${Math.round(intervalMs / 1000)}s` : "default poll interval";
+      out(`Settings: ${settings.path}: ${merge}, ${poll}`);
+    } catch (err) {
+      if (!(err instanceof SettingsError)) throw err;
+      out(`Settings: ${err.message}`);
+      healthy = false;
+    }
   }
 
   const states = describeStates(stateDir);

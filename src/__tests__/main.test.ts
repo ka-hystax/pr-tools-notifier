@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -121,5 +121,29 @@ describe("main", () => {
     const r = await cli("run", "-p", "demo", "--dry-run", "--pr-tools", stub);
     expect(r.code).toBe(1);
     expect(r.err).toContain("stopping: that gh-pr-tools profile does not exist");
+  });
+
+  test("config sets, shows and removes a setting", async () => {
+    expect(await cli("config", "set", "merge-status", "Merge")).toMatchObject({ code: 0 });
+    expect((await cli("config")).out).toMatch(/MERGE_STATUS\s+Merge/);
+    expect(await cli("config", "set", "poll-interval", "30s")).toMatchObject({ code: 1 });
+    expect(await cli("config", "unset", "merge-status")).toMatchObject({ code: 0 });
+    expect((await cli("config")).out).toMatch(/MERGE_STATUS\s+not set/);
+  });
+
+  test("a run refuses a broken settings file before polling anything", async () => {
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(join(configDir(), "settings.env"), "MERGE_STATUSES=Merge\n");
+    const r = await cli("run", "-p", "demo", "--dry-run", "--once", "--pr-tools", snapshotsStub());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("unknown setting 'MERGE_STATUSES'");
+  });
+
+  test("a run with a Jira merge status stops when gh-pr-tools does not report tickets", async () => {
+    await cli("config", "set", "merge-status", "Merge");
+    const r = await cli("run", "-p", "demo", "--dry-run", "--once", "--pr-tools", snapshotsStub());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("waits for the Jira status: Merge");
+    expect(r.err).toContain("stopping: this gh-pr-tools is too old for the Jira merge status");
   });
 });

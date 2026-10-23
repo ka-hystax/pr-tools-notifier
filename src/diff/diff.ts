@@ -1,5 +1,6 @@
 import type {
   Approval,
+  JiraTicket,
   MinePullRequest,
   Review,
   Snapshot,
@@ -13,6 +14,12 @@ export interface Baseline {
   missingTicks: Record<number, number>;
 }
 
+// Jira statuses that mean "go ahead and merge". While a PR's ticket is in any other one, a PR that is otherwise
+// ready waits. Compared case-insensitively.
+export interface MergeGate {
+  statuses: string[];
+}
+
 // Where an approved PR stands on its way to the merge button, as of a snapshot.
 export type MergeStatus =
   | { kind: "unapproved" }
@@ -20,7 +27,10 @@ export type MergeStatus =
   | { kind: "waiting_ci" }
   | { kind: "checking" }
   | { kind: "github_blocked"; waitingFor: string[] }
+  | { kind: "waiting_jira"; ticket: JiraTicket; wanted: string[] }
   | { kind: "ready" };
+
+export type WaitingJira = Extract<MergeStatus, { kind: "waiting_jira" }>;
 
 export interface PrRef {
   repo: string;
@@ -37,8 +47,10 @@ export type NotifyEvent =
   | { kind: "review_requested"; pr: PrRef }
   | { kind: "thread_answered"; pr: PrRef; thread: Thread }
   | { kind: "ci_failed"; pr: PrRef; failedJobs: string[] }
-  | { kind: "ready_to_merge"; pr: PrRef; approval: Approval }
-  | { kind: "merge_blocked"; pr: PrRef; waitingFor: string[] };
+  | { kind: "ready_to_merge"; pr: PrRef; approval: Approval; ticket?: JiraTicket } // ticket: already in the merge status
+  | { kind: "merge_blocked"; pr: PrRef; waitingFor: string[] }
+  | { kind: "review_passed"; pr: PrRef; approval: Approval; status: WaitingJira }
+  | { kind: "ticket_in_merge"; pr: PrRef; approval: Approval; ticket: JiraTicket; status: MergeStatus };
 
 export const MAX_MISSING_TICKS = 3;
 
@@ -73,7 +85,7 @@ function carryThreads<P extends PullRequest>(before: P | undefined, now: P): P {
 
 // Only a pending thread (still waiting for the author) holds a merge back; answered and resolved ones do not.
 // Approvals made before a rebase or a small fix (stale) still count; if GitHub insists on fresh ones, it reports "blocked".
-function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads): MergeStatus {
+function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads, hold: WaitingJira | null = null): MergeStatus {
   if (pr.approval.decision === "awaiting") return { kind: "unapproved" };
   const pending = (threads ?? []).filter((t) => t.state === "pending");
   const first = [...pending].sort((a, b) => compareText(a.lastCommentAt, b.lastCommentAt) || compareText(a.id, b.id))[0];
@@ -85,7 +97,30 @@ function mergeStatus(pr: MinePullRequest, threads: Thread[] | null = pr.threads)
   if (pr.ci.state === "pending") return { kind: "waiting_ci" };
   if (pr.mergeState === "unknown") return { kind: "checking" };
   if (pr.mergeState === "blocked") return { kind: "github_blocked", waitingFor: pr.pendingReviewers };
-  return { kind: "ready" };
+  return hold ?? { kind: "ready" };
+}
+
+// The ticket holds the merge back when a gate is set and the ticket is not (yet) in one of its statuses;
+// an unknown status (no token, failed lookup) counts as "not yet". PRs without a ticket are never held.
+function holdFor(
+  pr: MinePullRequest,
+  gate: MergeGate | undefined,
+  ticket: JiraTicket | null | undefined = pr.jira
+): WaitingJira | null {
+  if (!gate || !ticket) return null;
+  const status = ticket.status?.trim().toLowerCase();
+  if (status !== undefined && gate.statuses.some((s) => s.trim().toLowerCase() === status)) return null;
+  return { kind: "waiting_jira", ticket, wanted: gate.statuses };
+}
+
+// A failed lookup leaves the status null: keep the last real one for the same ticket, as with GitHub's "unknown".
+function carryTicket(old: MinePullRequest[], curr: MinePullRequest[]): MinePullRequest[] {
+  const before = new Map(old.map((p) => [p.number, p.jira]));
+  return curr.map((now) => {
+    const prev = before.get(now.number);
+    const keep = now.jira && now.jira.status === null && prev && prev.key === now.jira.key && prev.status !== null;
+    return keep ? { ...now, jira: { ...now.jira!, status: prev.status } } : now;
+  });
 }
 
 // GitHub answers "unknown" while it recomputes mergeability. For the same commit the last real answer is kept
@@ -99,7 +134,7 @@ function carryMergeState(old: MinePullRequest[], curr: MinePullRequest[]): MineP
   });
 }
 
-function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePullRequest): NotifyEvent[] {
+function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePullRequest, gate?: MergeGate): NotifyEvent[] {
   const pr = prRef(ctx, now);
   const events: NotifyEvent[] = [];
   for (const thread of enteringState(before?.threads, now.threads, "pending")) {
@@ -110,7 +145,11 @@ function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePull
   const failedBefore = before.ci.state === "fail" && before.headOid === now.headOid;
   if (now.ci.state === "fail" && !failedBefore) events.push({ kind: "ci_failed", pr, failedJobs: now.ci.failedJobs });
 
-  const status = mergeStatus(now, now.threads ?? before.threads);
+  const hold = holdFor(now, gate);
+  // Without an earlier reading of the same ticket (Jira just switched on, key changed) nothing "moved".
+  const sameTicket = before.jira && now.jira && before.jira.key === now.jira.key ? before.jira : null;
+  const heldBefore = sameTicket ? holdFor(before, gate, sameTicket) : hold;
+  const status = mergeStatus(now, now.threads ?? before.threads, hold);
   const known = new Set(before.reviews.map((r) => r.id));
   for (const review of now.reviews) {
     if (known.has(review.id) || review.author === ctx.viewer) continue;
@@ -122,10 +161,20 @@ function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePull
 
   // An approval already carries the verdict, so these only report changes that come without one.
   if (!events.some((e) => e.kind === "review_approved")) {
-    const was = mergeStatus(before).kind;
-    if (status.kind === "ready" && was !== "ready") events.push({ kind: "ready_to_merge", pr, approval: now.approval });
-    if (status.kind === "github_blocked" && was !== "github_blocked") {
-      events.push({ kind: "merge_blocked", pr, waitingFor: status.waitingFor });
+    const was = mergeStatus(before, before.threads, heldBefore).kind;
+    if (heldBefore && !hold && now.jira) {
+      events.push({ kind: "ticket_in_merge", pr, approval: now.approval, ticket: now.jira, status });
+    } else {
+      if (status.kind === "ready" && was !== "ready") {
+        const inMerge = gate && now.jira ? { ticket: now.jira } : {};
+        events.push({ kind: "ready_to_merge", pr, approval: now.approval, ...inMerge });
+      }
+      if (status.kind === "waiting_jira" && was !== "waiting_jira") {
+        events.push({ kind: "review_passed", pr, approval: now.approval, status });
+      }
+      if (status.kind === "github_blocked" && was !== "github_blocked") {
+        events.push({ kind: "merge_blocked", pr, waitingFor: status.waitingFor });
+      }
     }
   }
   return events;
@@ -169,16 +218,20 @@ function diffPrs<P extends PullRequest>(
   return { events, prs, missingTicks };
 }
 
-export function computeEvents(prev: Baseline | null, curr: Snapshot): { events: NotifyEvent[]; next: Baseline } {
+export function computeEvents(
+  prev: Baseline | null,
+  curr: Snapshot,
+  gate?: MergeGate
+): { events: NotifyEvent[]; next: Baseline } {
   const ctx = { repo: curr.repo, viewer: curr.viewer };
   if (prev !== null && prev.snapshot.repo === curr.repo) {
     const old = prev.snapshot;
     if (old.command === "mine" && curr.command === "mine") {
       const { events, prs, missingTicks } = diffPrs(
         old.prs,
-        carryMergeState(old.prs, curr.prs),
+        carryTicket(old.prs, carryMergeState(old.prs, curr.prs)),
         prev.missingTicks,
-        (before, now) => mineEvents(ctx, before, now)
+        (before, now) => mineEvents(ctx, before, now, gate)
       );
       return { events: events.sort(compareEvents), next: { snapshot: { ...curr, prs }, missingTicks } };
     }

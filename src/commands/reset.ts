@@ -20,7 +20,7 @@ export async function runReset({ prompter, dir, yes, out, activeLocks, remove }:
     out("`pr-tools-notifier run` is still running; stop it first.");
     return false;
   }
-  if (!yes && !(await prompter.confirm(`Delete ${dir} (the bot token, its key and the saved state)?`))) {
+  if (!yes && !(await prompter.confirm(`Delete ${dir} (the bot token, its key, the settings and the saved state)?`))) {
     out("Nothing changed.");
     return false;
   }

@@ -964,3 +964,179 @@ describe("mine: approvals made before the latest commits", () => {
     expect(events102("unapproved", "ready", awaiting)).toEqual([]);
   });
 });
+
+describe("mine: Jira merge gate", () => {
+  const gate = { statuses: ["Merge"] };
+  const ticket =
+    (status: string | null, key = "PRJ-1002") =>
+    (s: MineSnapshot) => {
+      pr102(s).jira = { key, url: `https://jira.example/browse/${key}`, status };
+    };
+  const noTicket = (s: MineSnapshot) => {
+    pr102(s).jira = null;
+  };
+  const apply =
+    (...edits: ((s: MineSnapshot) => void)[]) =>
+    (s: MineSnapshot) => {
+      for (const edit of edits) edit(s);
+    };
+  const run = (
+    from: [Position, (s: MineSnapshot) => void],
+    to: [Position, (s: MineSnapshot) => void],
+    options: { gate?: typeof gate | undefined; editCurr?: (s: MineSnapshot) => void } = {}
+  ) => {
+    const prev = base(mine(apply(place(from[0]), from[1])));
+    const curr = mine(apply(place(to[0]), to[1], options.editCurr ?? (() => {})));
+    return computeEvents(prev, curr, "gate" in options ? options.gate : gate);
+  };
+  const only102 = (events: NotifyEvent[]) => events.filter((e) => e.pr.number === 102);
+  const newApproval = (s: MineSnapshot) => {
+    pr102(s).reviews = [mkReview({ id: "NEW", author: "carol" })];
+  };
+
+  test("an approval that clears every blocker waits while the ticket is not in the merge status", () => {
+    const { events } = run(["unapproved", ticket("Review")], ["ready", ticket("Review")], { editCurr: newApproval });
+    expect(only102(events)).toEqual([
+      expect.objectContaining({
+        kind: "review_approved",
+        status: {
+          kind: "waiting_jira",
+          ticket: expect.objectContaining({ key: "PRJ-1002", status: "Review" }),
+          wanted: ["Merge"],
+        },
+      }),
+    ]);
+  });
+
+  test("an approval is ready at once when the ticket is already in the merge status, in any letter case", () => {
+    for (const status of ["Merge", "merge", " MERGE "]) {
+      const { events } = run(["unapproved", ticket(status)], ["ready", ticket(status)], { editCurr: newApproval });
+      expect(only102(events)).toEqual([expect.objectContaining({ kind: "review_approved", status: { kind: "ready" } })]);
+    }
+  });
+
+  test("blockers still come first: a pending thread is something to resolve, not a reason to wait for Jira", () => {
+    const { events } = run(["unapproved", ticket("Review")], ["pendingThread", ticket("Review")], { editCurr: newApproval });
+    expect(only102(events).find((e) => e.kind === "review_approved")).toMatchObject({ status: { kind: "todo" } });
+  });
+
+  test("blockers clearing after the approval say the review passed instead of announcing the merge", () => {
+    for (const from of ["pendingThread", "ciFailed", "ciRunning", "dirty", "blocked"] as const) {
+      const { events } = run([from, ticket("Review")], ["ready", ticket("Review")]);
+      expect(only102(events)).toEqual([
+        expect.objectContaining({ kind: "review_passed", status: expect.objectContaining({ kind: "waiting_jira" }) }),
+      ]);
+    }
+  });
+
+  test("the ticket reaching the merge status announces the merge when nothing else is in the way", () => {
+    const { events } = run(["ready", ticket("Approved")], ["ready", ticket("Merge")]);
+    expect(only102(events)).toEqual([
+      expect.objectContaining({
+        kind: "ticket_in_merge",
+        ticket: expect.objectContaining({ status: "Merge" }),
+        status: { kind: "ready" },
+        approval: expect.objectContaining({ decision: "approved" }),
+      }),
+    ]);
+  });
+
+  test("the ticket reaching the merge status names what still blocks the PR", () => {
+    const { events } = run(["pendingThread", ticket("Approved")], ["pendingThread", ticket("Merge")]);
+    expect(only102(events)).toEqual([
+      expect.objectContaining({
+        kind: "ticket_in_merge",
+        status: expect.objectContaining({ kind: "todo", pendingThreads: 1 }),
+      }),
+    ]);
+    const blocked = run(["blocked", ticket("Approved")], ["blocked", ticket("Merge")]).events;
+    expect(only102(blocked)).toEqual([
+      expect.objectContaining({ kind: "ticket_in_merge", status: { kind: "github_blocked", waitingFor: ["backend"] } }),
+    ]);
+  });
+
+  test("the ticket reaching the merge status of a PR that is not approved yet is reported as such", () => {
+    const { events } = run(["unapproved", ticket("Review")], ["unapproved", ticket("Merge")]);
+    expect(only102(events)).toEqual([expect.objectContaining({ kind: "ticket_in_merge", status: { kind: "unapproved" } })]);
+  });
+
+  test("a ticket moved back out of the merge status says the PR waits again", () => {
+    const { events } = run(["ready", ticket("Merge")], ["ready", ticket("Approved")]);
+    expect(only102(events)).toEqual([expect.objectContaining({ kind: "review_passed" })]);
+  });
+
+  test("blockers clearing while the ticket is in the merge status announce the merge again, naming the ticket", () => {
+    const { events } = run(["pendingThread", ticket("Merge")], ["ready", ticket("Merge")]);
+    expect(only102(events)).toEqual([
+      expect.objectContaining({
+        kind: "ready_to_merge",
+        ticket: expect.objectContaining({ key: "PRJ-1002", status: "Merge" }),
+      }),
+    ]);
+  });
+
+  test("the whole path: moved to Merge with a blocker, then the blocker clears", () => {
+    const first = run(["pendingThread", ticket("Approved")], ["pendingThread", ticket("Merge")]);
+    expect(only102(first.events).map((e) => e.kind)).toEqual(["ticket_in_merge"]);
+    const next = computeEvents(first.next, mine(apply(place("ready"), ticket("Merge"))), gate);
+    expect(only102(next.events).map((e) => e.kind)).toEqual(["ready_to_merge"]);
+  });
+
+  test("an approval and the move to the merge status in the same poll give one message, the approval", () => {
+    const { events } = run(["unapproved", ticket("Review")], ["ready", ticket("Merge")], { editCurr: newApproval });
+    expect(only102(events)).toEqual([expect.objectContaining({ kind: "review_approved", status: { kind: "ready" } })]);
+  });
+
+  test("stays quiet on the next poll", () => {
+    const first = run(["ready", ticket("Approved")], ["ready", ticket("Merge")]);
+    expect(only102(first.events)).not.toEqual([]);
+    expect(only102(computeEvents(first.next, mine(apply(place("ready"), ticket("Merge"))), gate).events)).toEqual([]);
+  });
+
+  test("without a gate the ticket is ignored", () => {
+    const { events } = run(["pendingThread", ticket("Review")], ["ready", ticket("Review")], { gate: undefined });
+    expect(only102(events)).toEqual([expect.objectContaining({ kind: "ready_to_merge" })]);
+    expect(only102(events)[0]).not.toHaveProperty("ticket");
+  });
+
+  test("a PR without a ticket is announced as ready as usual", () => {
+    const { events } = run(["pendingThread", noTicket], ["ready", noTicket]);
+    expect(only102(events).map((e) => e.kind)).toEqual(["ready_to_merge"]);
+  });
+
+  test("a failed lookup keeps the last known status of the same ticket", () => {
+    const first = run(["ready", ticket("Merge")], ["ready", ticket(null)]);
+    expect(only102(first.events)).toEqual([]);
+    expect(find(first.next.snapshot.prs as MineSnapshot["prs"], 102).jira?.status).toBe("Merge");
+  });
+
+  test("a status that was never known keeps the PR waiting and says so", () => {
+    const { events } = run(["pendingThread", ticket(null)], ["ready", ticket(null)]);
+    expect(only102(events)).toEqual([
+      expect.objectContaining({
+        kind: "review_passed",
+        status: expect.objectContaining({ ticket: expect.objectContaining({ status: null }) }),
+      }),
+    ]);
+  });
+
+  test("announces nothing when the ticket is first seen, for example right after Jira was switched on", () => {
+    const { events } = run(["ready", (s) => delete pr102(s).jira], ["ready", ticket("Review")]);
+    expect(only102(events)).toEqual([]);
+    const merge = run(["ready", (s) => delete pr102(s).jira], ["ready", ticket("Merge")]).events;
+    expect(only102(merge)).toEqual([]);
+  });
+
+  test("a different ticket key does not count as a move", () => {
+    const { events } = run(["ready", ticket("Review", "PRJ-1")], ["ready", ticket("Merge", "PRJ-2")]);
+    expect(only102(events)).toEqual([]);
+  });
+
+  test("a PR that is new to the baseline stays silent", () => {
+    const prev = mine((s) => {
+      s.prs = s.prs.filter((p) => p.number !== 102);
+    });
+    const curr = mine(apply(place("ready"), ticket("Merge")));
+    expect(only102(computeEvents(base(prev), curr, gate).events)).toEqual([]);
+  });
+});
