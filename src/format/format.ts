@@ -188,7 +188,7 @@ function verdict(status: MergeStatus, prUrl: string): string | null {
     case "github_blocked":
       return `🚧 GitHub blocks the merge: ${waitingFor(status.waitingFor)}`;
     case "waiting_jira":
-      return `🟢 <b>Review passed</b> · waiting for ${ticketLink(status.ticket)} to reach ${joinItems(status.wanted.map(italic), "or")} (${ticketNow(status.ticket)})`;
+      return `⏳ <b>Review passed</b> · waiting for ${ticketLink(status.ticket)} to reach ${joinItems(status.wanted.map(italic), "or")} (${ticketNow(status.ticket)})`;
     case "todo": {
       const items: string[] = [];
       const { pendingThreads, firstPendingThreadUrl } = status;

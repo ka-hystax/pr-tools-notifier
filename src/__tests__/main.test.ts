@@ -6,6 +6,7 @@ import { readVersion } from "../cli/version.js";
 import { NOT_CONFIGURED } from "../commands/sinks.js";
 import { ConfigStore } from "../config/config.js";
 import { configDir } from "../config/paths.js";
+import { SettingsStore } from "../config/settings.js";
 import { main } from "../main.js";
 import { readFixtureText } from "./fixtures.js";
 
@@ -190,7 +191,10 @@ describe("main", () => {
         const body = JSON.parse(init?.body ?? "{}");
         calls.push({ method, body });
         if (method === "getMe") return reply({ username: "demo_bot" });
-        if (method === "sendMessage") return reply({ message_id: nextId++ });
+        if (method === "sendMessage") {
+          calls.at(-1)!.body.sentAs = nextId;
+          return reply({ message_id: nextId++ });
+        }
         if (method === "getUpdates") {
           await new Promise((resolve) => setTimeout(resolve, 25));
           if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -230,6 +234,44 @@ describe("main", () => {
       expect(result.code).toBe(0);
       expect(result.err).toContain("listening for commands");
       expect(existsSync(join(configDir(), "state", "bot.lock"))).toBe(false);
+    });
+
+    test("a setting changed in Telegram is written to settings.env and used without a restart", async () => {
+      new ConfigStore(configDir()).save({ botUsername: "demo_bot", chatId: "42", token: "123456:TOKEN" });
+      writeFileSync(join(root, "mine.json"), readFixtureText("mine"));
+      writeFileSync(join(root, "todo.json"), readFixtureText("todo"));
+      const stub = fakePrTools(
+        `case "$1" in profile) echo demo;; *) case "$3" in mine) cat "${root}/mine.json";; todo) cat "${root}/todo.json";; esac;; esac`
+      );
+      const telegram = fakeTelegram();
+      vi.stubGlobal("fetch", telegram.fetchFn);
+
+      const running = cli("run", "--pr-tools", stub);
+      await vi.waitFor(() => expect(telegram.calls.some((c) => c.method === "setMyCommands")).toBe(true), { timeout: 5_000 });
+      const now = Math.floor(Date.now() / 1000);
+      telegram.queue.push({
+        update_id: 1,
+        message: { message_id: 9, date: now, text: "/settings", chat: { id: 42, type: "private" } },
+      });
+      await vi.waitFor(
+        () => expect(telegram.calls.some((c) => (c.body.text ?? "").includes("⚙️ <b>Settings</b>"))).toBe(true),
+        {
+          timeout: 5_000,
+        }
+      );
+      const screen = telegram.calls.find((c) => (c.body.text ?? "").includes("⚙️ <b>Settings</b>"))!.body.sentAs;
+      telegram.queue.push({
+        update_id: 2,
+        callback_query: { id: "q", data: "si:5m", message: { message_id: screen, chat: { id: 42, type: "private" } } },
+      });
+      await vi.waitFor(() => expect(existsSync(join(configDir(), "settings.env"))).toBe(true), { timeout: 5_000 });
+
+      process.emit("SIGINT");
+      const result = await running;
+      vi.unstubAllGlobals();
+      expect(result.code).toBe(0);
+      expect(new SettingsStore(configDir()).load()).toEqual({ intervalMs: 300_000 });
+      expect(result.err).toContain("settings changed: poll every 5m");
     });
 
     test("a second run only sends notifications while the first one answers", async () => {

@@ -15,3 +15,13 @@ export function readInterval(text: string): IntervalResult {
   if (ms > MAX_INTERVAL_MS) return { error: "max" };
   return { ms };
 }
+
+// The choices the bot offers; any other value can still be typed into settings.env.
+export const INTERVAL_PRESETS = ["1m", "5m", "15m", "30m", "1h", "4h", "12h"];
+
+// 300000 → "5m", 5400000 → "90m", 90000 → "90s": the largest whole unit.
+export function formatInterval(ms: number): string {
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
+  if (ms % 60_000 === 0) return `${ms / 60_000}m`;
+  return `${Math.round(ms / 1000)}s`;
+}

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -9,6 +9,7 @@ import { StateStore } from "../../state/store.js";
 import { TelegramError, type BotCommand, type EditParams, type SendParams, type Update } from "../../telegram/api.js";
 import { Bot, BOT_COMMANDS, KEYBOARD, parseAction, type BotDeps } from "../bot.js";
 import { BotStateStore } from "../state.js";
+import { SettingsStore } from "../../config/settings.js";
 import type { BotApi } from "../types.js";
 
 const CHAT = "42";
@@ -159,6 +160,8 @@ describe("parseAction", () => {
     ["📥 Todo", "todo"],
     ["📤 Mine", "mine"],
     ["ℹ️ Status", "status"],
+    ["/settings", "settings"],
+    ["⚙️ Settings", "settings"],
     ["/nope", "unknown"],
     ["hello", "unknown"],
     ["", "unknown"],
@@ -373,9 +376,9 @@ describe("help and status", () => {
     expect(text).toContain("profile <code>work</code>");
     expect(text).toContain("mine: 3 PRs, polled 0m ago");
     expect(text).toContain("todo: 2 PRs");
-    expect(text).toContain("every 5 min");
+    expect(text).toContain("every 5m");
     expect(text).toContain("Jira: Merge, Ready");
-    expect(buttonData(h.api.sent[0]!.params)).toEqual(["x"]);
+    expect(buttonData(h.api.sent[0]!.params)).toEqual(["s", "x"]);
   });
 
   test("/status says when nothing was polled yet", async () => {
@@ -453,5 +456,154 @@ describe("run", () => {
     h.controller.abort();
     await done;
     expect(h.logs.filter((l) => l.startsWith("warn: listening for commands"))).toHaveLength(1);
+  });
+});
+
+describe("settings", () => {
+  function withSettings(over: Partial<BotDeps> = {}) {
+    const store = new SettingsStore(root);
+    const h = harness({ settings: () => store.load(), settingsStore: store, ...over });
+    return { ...h, store };
+  }
+  const last = (h: ReturnType<typeof harness>) => h.api.edits.at(-1)!;
+
+  test("/settings shows both settings with the defaults and the buttons to change them", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("⚙️ Settings", 11));
+    const sent = h.api.sent[0]!.params;
+    expect(sent.text).toContain("Poll interval: <b>1m (default)</b>");
+    expect(sent.text).toContain("Jira merge status: not set");
+    expect(sent.text).toContain("apply within a minute");
+    expect(buttonData(sent)).toEqual(["si", "sj", "x"]);
+    expect(h.api.deleted).toEqual([11]);
+  });
+
+  test("without a settings store it only shows them", async () => {
+    const h = harness();
+    await h.bot.handle(h.message("/settings", 11));
+    expect(buttonData(h.api.sent[0]!.params)).toEqual(["x"]);
+    expect(h.api.sent[0]!.params.text).toContain("pr-tools-notifier config");
+    await h.bot.handle(h.tap("si:5m", h.api.sent[0]!.id));
+    expect(h.api.answers.at(-1)).toMatchObject({ text: "Settings cannot be changed from here" });
+  });
+
+  test("picks the poll interval with a button and saves it", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("si", id));
+    expect(last(h).text).toContain("How often to ask GitHub");
+    expect(buttonData(last(h))).toEqual(["si:1m", "si:5m", "si:15m", "si:30m", "si:1h", "si:4h", "si:12h", "si:-", "s"]);
+    expect(
+      last(h)
+        .buttons!.flat()
+        .find((b) => "data" in b && b.data === "si:-")!.text
+    ).toBe("✓ Default");
+
+    await h.bot.handle(h.tap("si:5m", id));
+    expect(h.store.load()).toEqual({ intervalMs: 300_000 });
+    expect(h.api.answers.at(-1)).toMatchObject({ text: "Saved" });
+    expect(last(h).text).toContain("Poll interval: <b>5m</b>");
+    expect(last(h).text).toContain("✅ Poll interval: 5m");
+
+    await h.bot.handle(h.tap("si", id));
+    expect(
+      last(h)
+        .buttons!.flat()
+        .find((b) => "data" in b && b.data === "si:5m")!.text
+    ).toBe("✓ 5m");
+    await h.bot.handle(h.tap("si:-", id));
+    expect(h.store.load()).toEqual({});
+    expect(last(h).text).toContain("✅ Poll interval: 1m (default)");
+  });
+
+  test("ignores an interval that is not a valid one", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    await h.bot.handle(h.tap("si:30s", h.api.sent[0]!.id));
+    expect(h.store.exists()).toBe(false);
+  });
+
+  test("asks for the Jira status and saves the next message, which it then takes down", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("sj", id));
+    expect(last(h).text).toContain("Send its name as a message");
+    expect(buttonData(last(h))).toEqual(["s"]);
+
+    await h.bot.handle(h.message(" Merge , Ready to merge ", 12));
+    expect(h.store.load()).toEqual({ mergeStatuses: ["Merge", "Ready to merge"] });
+    expect(h.api.deleted).toContain(12);
+    expect(last(h).text).toContain("Jira merge status: <b>Merge, Ready to merge</b>");
+    expect(last(h).text).toContain("✅ Jira merge status: Merge, Ready to merge");
+
+    await h.bot.handle(h.message("Merge", 13));
+    expect(h.texts().at(-1)).toMatch(/^🤷 I did not get that/);
+  });
+
+  test("clears the Jira status with a button", async () => {
+    const h = withSettings();
+    h.store.set("MERGE_STATUS", "Merge");
+    await h.bot.handle(h.message("/settings", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("sj", id));
+    expect(buttonData(last(h))).toEqual(["sj:-", "s"]);
+    await h.bot.handle(h.tap("sj:-", id));
+    expect(h.store.load()).toEqual({});
+    expect(last(h).text).toContain("✅ Jira merge status cleared");
+  });
+
+  test("a command instead of the answer cancels the question", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    await h.bot.handle(h.tap("sj", h.api.sent[0]!.id));
+    await h.bot.handle(h.message("/mine", 12));
+    await h.bot.handle(h.message("Merge", 13));
+    expect(h.store.exists()).toBe(false);
+  });
+
+  test("a late answer is not taken as the status", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    await h.bot.handle(h.tap("sj", h.api.sent[0]!.id));
+    h.advance(11 * 60_000);
+    await h.bot.handle(h.message("Merge", 12));
+    expect(h.store.exists()).toBe(false);
+  });
+
+  test("going back from a question cancels it", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("sj", id));
+    await h.bot.handle(h.tap("s", id));
+    await h.bot.handle(h.message("Merge", 12));
+    expect(h.store.exists()).toBe(false);
+  });
+
+  test("says why a value was not saved", async () => {
+    writeFileSync(join(root, "blocker"), "");
+    const store = new SettingsStore(join(root, "blocker")); // a file where the directory should be
+    const h = harness({ settings: () => ({}), settingsStore: store });
+    await h.bot.handle(h.message("/settings", 11));
+    await h.bot.handle(h.tap("si:5m", h.api.sent[0]!.id));
+    expect(h.api.edits.at(-1)!.text).toMatch(/⚠️ Not saved: \S+/);
+    expect(h.logs.some((l) => l.startsWith("warn: settings: could not save POLL_INTERVAL"))).toBe(true);
+  });
+
+  test("shows that --interval wins for this run", async () => {
+    const h = withSettings({ intervalFlagMs: 120_000 });
+    h.store.set("POLL_INTERVAL", "1h");
+    await h.bot.handle(h.message("/settings", 11));
+    expect(h.api.sent[0]!.params.text).toContain("<b>2m</b> from <code>--interval</code> for this run (the setting is 1h)");
+  });
+
+  test("the Settings button on /status opens them in place", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/status", 11));
+    await h.bot.handle(h.tap("s", h.api.sent[0]!.id));
+    expect(h.api.sent).toHaveLength(1);
+    expect(last(h).text).toContain("⚙️ <b>Settings</b>");
   });
 });

@@ -1,3 +1,5 @@
+import { DEFAULT_INTERVAL_MS, formatInterval, readInterval } from "../config/interval.js";
+import type { Settings, SettingsStore } from "../config/settings.js";
 import type { Snapshot } from "../contract/snapshot.js";
 import { computeEvents, type MergeGate } from "../diff/diff.js";
 import { bold, clip, escapeHtml } from "../format/format.js";
@@ -9,6 +11,7 @@ import { LiveView } from "./live.js";
 import type { BotStateStore } from "./state.js";
 import type { BotApi } from "./types.js";
 import { ago, renderList } from "./views.js";
+import { CLOSE, intervalScreen, savedNote, settingsScreen, statusPrompt, type SettingsView } from "./settings.js";
 
 import { KEYBOARD } from "./keyboard.js";
 
@@ -18,12 +21,18 @@ export const BOT_COMMANDS: BotCommand[] = [
   { command: "todo", description: "PRs waiting for your review" },
   { command: "mine", description: "your open PRs" },
   { command: "status", description: "what is being watched" },
+  { command: "settings", description: "poll interval and Jira merge status" },
   { command: "help", description: "what the bot can do" },
 ];
 
-const LABELS: Record<string, Action> = { "📥 Todo": "todo", "📤 Mine": "mine", "ℹ️ Status": "status" };
+const LABELS: Record<string, Action> = {
+  "📥 Todo": "todo",
+  "📤 Mine": "mine",
+  "ℹ️ Status": "status",
+  "⚙️ Settings": "settings",
+};
 
-export type Action = "todo" | "mine" | "status" | "help" | "unknown";
+export type Action = "todo" | "mine" | "status" | "settings" | "help" | "unknown";
 
 // A slash command (with or without @botname) or the text of a keyboard button.
 export function parseAction(text: string): Action {
@@ -35,6 +44,7 @@ export function parseAction(text: string): Action {
     case "todo":
     case "mine":
     case "status":
+    case "settings":
       return match[1]!.toLowerCase() as Action;
     case "start":
     case "help":
@@ -50,11 +60,13 @@ I message you when something changes in your PRs. You can also ask me:
 📥 /todo — PRs waiting for your review
 📤 /mine — your open PRs
 ℹ️ /status — what I am watching
+⚙️ /settings — poll interval and Jira merge status
 
 An answer stays on screen until you ask for something else.`;
 
-const CLOSE: ApiButton = { text: "✖ Close", data: "x" };
 const ERROR_MAX = 300;
+// A question the bot asked ("send the Jira status") is forgotten after this long.
+const ANSWER_WITHIN_MS = 10 * 60_000;
 
 export interface BotDeps {
   api: BotApi;
@@ -67,7 +79,12 @@ export interface BotDeps {
   state: BotStateStore;
   log: Logger;
   signal: AbortSignal;
-  settings: () => { intervalMs: number; mergeStatuses?: string[] };
+  // The current settings, re-read on every call.
+  settings: () => Settings;
+  // Where /settings writes; without it the settings can only be looked at.
+  settingsStore?: SettingsStore;
+  // `run --interval`, which wins over POLL_INTERVAL for this run.
+  intervalFlagMs?: number;
   timeZone?: string;
   now?: () => Date;
   // Commands older than this are dropped: Telegram keeps unread ones for a day, long after they were meant.
@@ -95,6 +112,8 @@ export class Bot {
   private readonly freshMs: number;
   private readonly strangers = new Set<number>();
   private shown: Shown | null = null;
+  // Set while the bot waits for the Jira status as a plain message, on the settings message it asked in.
+  private asked: { messageId: number; at: number } | null = null;
 
   constructor(private readonly deps: BotDeps) {
     this.live = new LiveView(deps.api, deps.chatId, deps.state, deps.log);
@@ -117,7 +136,7 @@ export class Bot {
       if (signal.aborted) return;
       log.warn(`bot setup: ${errorMessage(err)}`);
     }
-    log.info("listening for commands: /todo, /mine, /status");
+    log.info("listening for commands: /todo, /mine, /status, /settings");
 
     let offset: number | undefined;
     let failures = 0;
@@ -172,14 +191,102 @@ export class Bot {
 
     const action = parseAction(message.text);
     const replaces = message.message_id;
+    const asked = this.asked;
+    this.asked = null;
+    if (action === "unknown" && asked && !message.text.trim().startsWith("/")) {
+      if (asked.messageId === this.live.current && this.now().getTime() - asked.at < ANSWER_WITHIN_MS) {
+        await this.live.remove(replaces);
+        await this.saveSetting(asked.messageId, "MERGE_STATUS", message.text);
+        return;
+      }
+    }
     if (action === "todo" || action === "mine") return this.openList(action, replaces);
+    this.shown = null;
     if (action === "status") {
-      await this.live.show(this.statusText(), [[CLOSE]], { replaces });
+      await this.live.show(this.statusText(), [[{ text: "⚙️ Settings", data: "s" }, CLOSE]], { replaces });
+    } else if (action === "settings") {
+      const { text, buttons } = settingsScreen(this.settingsView());
+      await this.live.show(text, buttons, { replaces });
     } else {
       const text = action === "unknown" ? `🤷 I did not get that.\n\n${HELP}` : HELP;
       await this.live.show(text, [], { replaces, keyboard: KEYBOARD });
     }
-    this.shown = null;
+  }
+
+  private settingsView(note?: string): SettingsView {
+    return {
+      settings: this.deps.settings(),
+      editable: this.deps.settingsStore !== undefined,
+      ...(this.deps.intervalFlagMs !== undefined ? { intervalFlagMs: this.deps.intervalFlagMs } : {}),
+      ...(note ? { note } : {}),
+    };
+  }
+
+  // Writes one setting and shows the settings with what changed, or why it did not.
+  private async saveSetting(messageId: number, key: "MERGE_STATUS" | "POLL_INTERVAL", value: string): Promise<void> {
+    let note: string;
+    const store = this.deps.settingsStore;
+    if (!store) {
+      note = "⚠️ Settings cannot be changed from here.";
+    } else {
+      try {
+        const stored = store.set(key, value);
+        note =
+          key === "MERGE_STATUS"
+            ? savedNote(stored ? `Jira merge status: ${stored.split(",").join(", ")}` : "Jira merge status cleared")
+            : savedNote(`Poll interval: ${stored || `${formatInterval(DEFAULT_INTERVAL_MS)} (default)`}`);
+        this.deps.log.info(`settings: ${key} ${stored ? `set to ${stored}` : "cleared"} from Telegram`);
+      } catch (err) {
+        note = `⚠️ Not saved: ${this.reason(err)}`;
+        this.deps.log.warn(`settings: could not save ${key}: ${errorMessage(err)}`);
+      }
+    }
+    const { text, buttons } = settingsScreen(this.settingsView(note));
+    await this.live.update(messageId, text, buttons);
+  }
+
+  // Button taps on the settings screens: s (settings), si / si:<value> (interval), sj / sj:- (Jira status).
+  private async onSettingsTap(data: string, messageId: number, answer: (text?: string) => Promise<void>): Promise<void> {
+    const editable = this.deps.settingsStore !== undefined;
+    if (data === "s") {
+      await answer();
+      const { text, buttons } = settingsScreen(this.settingsView());
+      await this.live.update(messageId, text, buttons);
+      return;
+    }
+    if (!editable) {
+      await answer("Settings cannot be changed from here");
+      return;
+    }
+    if (data === "si") {
+      await answer();
+      const { text, buttons } = intervalScreen(this.settingsView());
+      await this.live.update(messageId, text, buttons);
+      return;
+    }
+    if (data.startsWith("si:")) {
+      const value = data.slice(3);
+      if (value !== "-" && !("ms" in readInterval(value))) {
+        await answer();
+        return;
+      }
+      await answer("Saved");
+      await this.saveSetting(messageId, "POLL_INTERVAL", value === "-" ? "" : value);
+      return;
+    }
+    if (data === "sj") {
+      await answer();
+      const { text, buttons } = statusPrompt(this.settingsView());
+      await this.live.update(messageId, text, buttons);
+      this.asked = { messageId, at: this.now().getTime() };
+      return;
+    }
+    if (data === "sj:-") {
+      await answer("Cleared");
+      await this.saveSetting(messageId, "MERGE_STATUS", "");
+      return;
+    }
+    await answer();
   }
 
   private async onCallback(query: NonNullable<Update["callback_query"]>): Promise<void> {
@@ -199,10 +306,16 @@ export class Bot {
       return;
     }
     const data = query.data ?? "";
+    this.asked = null;
     if (data === "x") {
       await answer();
       this.shown = null;
       await this.live.close();
+      return;
+    }
+    if (data === "s" || data.startsWith("si") || data.startsWith("sj")) {
+      this.shown = null;
+      await this.onSettingsTap(data, query.message.message_id, answer);
       return;
     }
     const match = /^([pr]):(mine|todo)(?::(\d+))?$/.exec(data);
@@ -321,7 +434,9 @@ export class Bot {
 
   private statusText(): string {
     const { profile, commands, stores } = this.deps;
-    const { intervalMs, mergeStatuses } = this.deps.settings();
+    const settings = this.deps.settings();
+    const intervalMs = this.deps.intervalFlagMs ?? settings.intervalMs ?? DEFAULT_INTERVAL_MS;
+    const { mergeStatuses } = settings;
     const lines = [`ℹ️ ${bold("Status")} · profile <code>${escapeHtml(profile)}</code>`];
     for (const kind of commands) {
       const saved = stores[kind].peek();
@@ -331,8 +446,8 @@ export class Bot {
           : `${kind === "mine" ? "📤" : "📥"} ${kind}: not polled yet`
       );
     }
-    lines.push(`⏱ every ${Math.round(intervalMs / 60_000)} min`);
-    if (mergeStatuses) lines.push(`🟣 "Time to merge" waits for Jira: ${escapeHtml(mergeStatuses.join(", "))}`);
+    lines.push(`⏱ every ${formatInterval(intervalMs)}`);
+    if (mergeStatuses) lines.push(`🎫 "Time to merge" waits for Jira: ${escapeHtml(mergeStatuses.join(", "))}`);
     return lines.join("\n");
   }
 }

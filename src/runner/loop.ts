@@ -25,12 +25,16 @@ const SETUP_ERRORS: [RegExp, string][] = [
   ],
 ];
 
+// Long pauses are slept in steps of at most this, so a changed interval applies within a step.
+export const PAUSE_STEP_MS = 60_000;
+
 export interface LoopDeps {
   tick: () => Promise<TickResult>;
   sink: Sink;
   monitor: FailureMonitor;
   log: Logger;
-  intervalMs: number;
+  // A function when the interval can change while running (settings are re-read).
+  intervalMs: number | (() => number);
   once: boolean;
   signal: AbortSignal;
   now?: () => Date;
@@ -40,7 +44,8 @@ export interface LoopDeps {
 
 // Resolves to whether the last tick succeeded; a tick cut short by the abort signal is not counted.
 export async function runLoop(deps: LoopDeps): Promise<boolean> {
-  const { tick, sink, monitor, log, intervalMs, once, signal, timeZone } = deps;
+  const { tick, sink, monitor, log, once, signal, timeZone } = deps;
+  const interval = typeof deps.intervalMs === "function" ? deps.intervalMs : () => deps.intervalMs as number;
   const now = deps.now ?? (() => new Date());
   const wait = deps.sleep ?? sleep;
   let ok = true;
@@ -78,7 +83,11 @@ export async function runLoop(deps: LoopDeps): Promise<boolean> {
     }
 
     if (once) break;
-    await wait(intervalMs, signal);
+    for (let slept = 0; !signal.aborted && slept < interval(); ) {
+      const step = Math.min(interval() - slept, PAUSE_STEP_MS);
+      await wait(step, signal);
+      slept += step;
+    }
   }
   return ok;
 }

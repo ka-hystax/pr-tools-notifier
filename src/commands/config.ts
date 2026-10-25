@@ -38,14 +38,18 @@ export function runConfig(store: SettingsStore, action: ConfigAction, out: (line
       return false;
     }
     if (action.type === "unset") {
-      out(store.unset(key) ? `${key} removed. Restart \`pr-tools-notifier run\` to apply it.` : `${key} was not set.`);
+      out(
+        store.unset(key)
+          ? `${key} removed. A running \`pr-tools-notifier run\` picks it up within a minute.`
+          : `${key} was not set.`
+      );
       return true;
     }
     const stored = store.set(key, action.value);
     out(
       stored === ""
         ? `${key} removed.`
-        : `${key}=${stored} saved in ${store.path}. Restart \`pr-tools-notifier run\` to apply it.`
+        : `${key}=${stored} saved in ${store.path}. A running \`pr-tools-notifier run\` picks it up within a minute.`
     );
     return true;
   } catch (err) {

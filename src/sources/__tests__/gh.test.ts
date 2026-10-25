@@ -79,6 +79,14 @@ describe("ghSource", () => {
       expect(snapshot.command === "mine" && snapshot.prs[0]!.jira).toEqual({ key: "PRJ-1", url: null, status: null });
     });
 
+    test("follows a setting that changes while running", async () => {
+      let required = false;
+      const source = ghSource({ profile: "w", exec: fake(withoutJira).exec, jiraRequired: () => required });
+      await expect(source("mine")).resolves.toBeDefined();
+      required = true;
+      await expect(source("mine")).rejects.toThrow("does not report Jira tickets");
+    });
+
     test("is not looked for without the gate, and never for todo", async () => {
       await expect(ghSource({ profile: "w", exec: fake(withoutJira).exec })("mine")).resolves.toBeDefined();
       await expect(ghSource({ profile: "w", exec: fake(todoJson).exec, jiraRequired: true })("todo")).resolves.toBeDefined();

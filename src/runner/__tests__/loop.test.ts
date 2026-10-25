@@ -127,11 +127,45 @@ describe("runLoop", () => {
     expect(h.sleeps).toEqual([]);
   });
 
-  test("ticks, then sleeps for the interval, until aborted", async () => {
+  test("ticks, then sleeps for the interval in steps of at most a minute, until aborted", async () => {
     const h = harness([ok, ok, ok]);
     expect(await runLoop(h.deps)).toBe(true);
     expect(h.ticks()).toBe(4);
-    expect(h.sleeps).toEqual([300_000, 300_000, 300_000]);
+    expect(h.sleeps).toEqual(Array(15).fill(60_000));
+  });
+
+  test("a minute or less is one sleep, an odd interval ends with the remainder", async () => {
+    expect(
+      await (async () => {
+        const h = harness([ok], { intervalMs: 60_000 });
+        await runLoop(h.deps);
+        return h.sleeps;
+      })()
+    ).toEqual([60_000]);
+    const h = harness([ok], { intervalMs: 150_000 });
+    await runLoop(h.deps);
+    expect(h.sleeps).toEqual([60_000, 60_000, 30_000]);
+  });
+
+  test("an interval changed during a pause applies at the next step", async () => {
+    let interval = 12 * 3_600_000;
+    const h = harness([ok], { intervalMs: () => interval });
+    h.deps.sleep = async (ms) => {
+      h.sleeps.push(ms);
+      interval = 120_000; // the user picked 2m in the bot during the first step
+    };
+    await runLoop(h.deps);
+    expect(h.sleeps).toEqual([60_000, 60_000]);
+  });
+
+  test("stops sleeping as soon as it is aborted", async () => {
+    const h = harness([ok], { intervalMs: 3_600_000 });
+    h.deps.sleep = async (ms) => {
+      h.sleeps.push(ms);
+      h.controller.abort();
+    };
+    await runLoop(h.deps);
+    expect(h.sleeps).toEqual([60_000]);
   });
 
   test("reports the outcome of the last completed tick", async () => {

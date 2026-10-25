@@ -95,9 +95,9 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  let settings;
+  const settings = new SettingsStore(configDir());
   try {
-    settings = new SettingsStore(configDir()).load();
+    settings.load();
   } catch (err) {
     if (!(err instanceof SettingsError)) throw err;
     console.error(`pr-tools-notifier: ${err.message}`);

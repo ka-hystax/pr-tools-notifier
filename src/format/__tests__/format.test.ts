@@ -410,7 +410,7 @@ describe("Jira merge gate", () => {
     const [text] = fmt([approved("carol", met, waiting())]);
     expect(text).toContain("✅ <b>carol</b> approved · 2/2\n");
     expect(text).toContain(
-      '🟢 <b>Review passed</b> · waiting for <a href="https://jira.example.com/browse/PRJ-1001">PRJ-1001</a> to reach <i>Merge</i> (now: <i>In Review</i>)'
+      '⏳ <b>Review passed</b> · waiting for <a href="https://jira.example.com/browse/PRJ-1001">PRJ-1001</a> to reach <i>Merge</i> (now: <i>In Review</i>)'
     );
   });
 
@@ -429,7 +429,7 @@ describe("Jira merge gate", () => {
   });
 
   test("review passed leads with the verdict and keeps the stale count", () => {
-    expect(fmt([passed()])[0]).toMatch(/^🟢 <b>Review passed<\/b> · waiting for .*\n<a href=/);
+    expect(fmt([passed()])[0]).toMatch(/^⏳ <b>Review passed<\/b> · waiting for .*\n<a href=/);
     expect(
       fmt([passed(waiting(), { approvers: [], staleApprovers: ["alice", "carol"], decision: "approved_stale" })])[0]
     ).toContain("\n✅ Approved 2/2 (2 stale)\n");
@@ -471,7 +471,7 @@ describe("Jira merge gate", () => {
 
   test("ranks after the other events of the PR, like the merge verdicts", () => {
     const [text] = fmt([passed(), pending(), inMerge(ready)]);
-    const order = ["💬", "🎉", "🟢"].map((marker) => text!.indexOf(marker));
+    const order = ["💬", "🎉", "⏳ <b>Review passed"].map((marker) => text!.indexOf(marker));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order.every((i) => i >= 0)).toBe(true);
   });

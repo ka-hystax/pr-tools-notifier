@@ -1,2 +1,5 @@
-// The buttons under the input field: one tap for the three things people ask the bot most.
-export const KEYBOARD = [["📥 Todo", "📤 Mine"], ["ℹ️ Status"]];
+// The buttons under the input field: one tap for each thing the bot answers.
+export const KEYBOARD = [
+  ["📥 Todo", "📤 Mine"],
+  ["ℹ️ Status", "⚙️ Settings"],
+];

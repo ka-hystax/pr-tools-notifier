@@ -46,6 +46,11 @@ function or(items: string[]): string {
   return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`;
 }
 
+// One circle per row answers "whose move": merge it, fix something, or wait for others. The text says what exactly.
+const MERGE = "🟢";
+const YOUR_MOVE = "🔴";
+const WAIT = "⚪";
+
 // Ranks, most actionable first: ready to merge, then what needs fixing, then what waits for others.
 const READY = 0;
 const BROKEN = 1;
@@ -71,34 +76,34 @@ function mineRow(pr: MineSnapshot["prs"][number], options: ListOptions): Row {
   let rank: number;
   let parts: string[];
   if (todo.length > 0) {
-    [emoji, rank] = changes.length > 0 || ciFailed ? ["🔴", BROKEN] : ["🟠", FIX];
+    [emoji, rank] = [YOUR_MOVE, changes.length > 0 || ciFailed ? BROKEN : FIX];
     parts = todo;
   } else if (pr.isDraft) {
-    [emoji, rank, parts] = ["📝", PARKED, ["draft"]];
+    [emoji, rank, parts] = [WAIT, PARKED, ["draft"]];
   } else if (pr.approval.decision === "awaiting") {
-    [emoji, rank] = ["⏳", WAITING];
+    [emoji, rank] = [WAIT, WAITING];
     parts = [pr.pendingReviewers.length > 0 ? `waiting for ${names(pr.pendingReviewers)}` : "needs approval"];
   } else {
     const status = mergeStatus(pr, pr.threads, holdFor(pr, options.gate));
     switch (status.kind) {
       case "ready":
-        [emoji, rank, parts] = ["🟢", READY, ["ready to merge"]];
+        [emoji, rank, parts] = [MERGE, READY, ["ready to merge"]];
         break;
       case "github_blocked":
-        [emoji, rank] = ["🚧", BLOCKED];
+        [emoji, rank] = [WAIT, BLOCKED];
         parts = [`GitHub blocks the merge${status.waitingFor.length > 0 ? `: waiting for ${names(status.waitingFor)}` : ""}`];
         break;
       case "waiting_jira": {
         const now = status.ticket.status === null ? "Jira status unavailable" : `now: ${italic(status.ticket.status)}`;
-        [emoji, rank] = ["🟣", PARKED];
+        [emoji, rank] = [WAIT, PARKED];
         parts = [`review passed · waiting for ${or(status.wanted.map(italic))} (${now})`];
         break;
       }
       case "checking":
-        [emoji, rank, parts] = ["⏳", WAITING, ["GitHub is checking the branch"]];
+        [emoji, rank, parts] = [WAIT, WAITING, ["GitHub is checking the branch"]];
         break;
       default:
-        [emoji, rank, parts] = ["⏳", WAITING, ["CI is running"]];
+        [emoji, rank, parts] = [WAIT, WAITING, ["CI is running"]];
     }
   }
 
@@ -109,7 +114,7 @@ function mineRow(pr: MineSnapshot["prs"][number], options: ListOptions): Row {
   return {
     rank,
     createdAt: pr.createdAt,
-    yours: rank <= BLOCKED,
+    yours: rank <= FIX,
     text: `${head(emoji, pr)}\n${[...parts, ...info].join(" · ")}`,
   };
 }
@@ -124,10 +129,10 @@ function todoRow(pr: TodoSnapshot["prs"][number], viewer: string, options: ListO
   if (replies.length > 0) {
     parts.push(link(earliest(replies)?.url ?? pr.url, `${plural(replies.length, "reply", "replies")} in your threads`));
   }
-  let emoji = pr.requestedFromMe ? "🔔" : "↩️";
+  let emoji = YOUR_MOVE;
   let rank = pr.requestedFromMe ? READY : BROKEN;
   if (parts.length === 0) {
-    [emoji, rank] = ["👀", WAITING];
+    [emoji, rank] = [WAIT, WAITING];
     parts.push(open.length > 0 ? `waiting for the author on ${plural(open.length, "thread")}` : "you reviewed");
   }
   const info = [`by ${escapeHtml(pr.author)}`, approvalCount(pr.approval), ago(pr.createdAt, options.now)];

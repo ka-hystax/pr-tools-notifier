@@ -53,8 +53,8 @@ describe("mine rows", () => {
     const text = plain(renderList(mine, options)[0]!);
     expect(text).toMatch(/^📤 Mine · 3 PRs · 10:00\n\n🔴 #101 /);
     expect(text).toContain("changes requested by bob · CI failed · 2 threads · needs a rebase · 1/2 · 4d");
-    expect(text).toContain("⏳ #102 PRJ-1002: fix locale fallback\nneeds approval · 0/2 · 3d");
-    expect(text).toContain("📝 #103");
+    expect(text).toContain("⚪ #102 PRJ-1002: fix locale fallback\nneeds approval · 0/2 · 3d");
+    expect(text).toContain("⚪ #103 PRJ-1003: migrate settings page\ndraft");
   });
 
   test("an approved, clean PR is ready to merge and comes first", () => {
@@ -101,8 +101,8 @@ describe("mine rows", () => {
     expect(html).toContain('<a href="https://t/early">2 threads</a>');
   });
 
-  test("a rebase or a thread is orange, CI or requested changes red", () => {
-    expect(firstPage([minePr({ mergeState: "dirty" })])).toContain("🟠");
+  test("anything to fix is red: a rebase, a thread, CI or requested changes", () => {
+    expect(firstPage([minePr({ mergeState: "dirty" })])).toContain("🔴");
     expect(firstPage([minePr({ ci: { state: "fail", failedJobs: [] } })])).toContain("🔴");
   });
 
@@ -111,7 +111,7 @@ describe("mine rows", () => {
   });
 
   test("an approved PR that GitHub still blocks, checks or runs CI for", () => {
-    expect(firstPage([approved({ mergeState: "blocked", pendingReviewers: ["backend"] })])).toContain("🚧 #");
+    expect(firstPage([approved({ mergeState: "blocked", pendingReviewers: ["backend"] })])).toContain("⚪ #");
     expect(firstPage([approved({ mergeState: "blocked", pendingReviewers: ["backend"] })])).toContain(
       "GitHub blocks the merge: waiting for backend"
     );
@@ -128,7 +128,7 @@ describe("mine rows", () => {
     const gate = { statuses: ["Merge"] };
     const waiting = approved({ jira: { key: "PRJ-1", url: null, status: "Approved" } });
     expect(firstPage([waiting], { ...options, gate })).toMatch(
-      /🟣 #\d+ [^\n]+\nreview passed · waiting for Merge \(now: Approved\)/
+      /⚪ #\d+ [^\n]+\nreview passed · waiting for Merge \(now: Approved\)/
     );
     const there = approved({ jira: { key: "PRJ-1", url: null, status: "merge" } });
     expect(firstPage([there], { ...options, gate })).toContain("🟢");
@@ -148,6 +148,36 @@ describe("mine rows", () => {
   });
 });
 
+describe("the circles", () => {
+  test("every row starts with one of three: merge it, your move, or waiting for others", () => {
+    const gate = { statuses: ["Merge"] };
+    const rows = [
+      approved(),
+      minePr({ ci: { state: "fail", failedJobs: [] } }),
+      minePr({ mergeState: "behind" }),
+      minePr({ pendingReviewers: ["carol"] }),
+      approved({ mergeState: "blocked" }),
+      approved({ mergeState: "unknown" }),
+      approved({ ci: { state: "pending", failedJobs: [] } }),
+      approved({ jira: { key: "PRJ-1", url: null, status: "Approved" } }),
+      minePr({ isDraft: true }),
+    ];
+    const heads = firstPage(rows, { ...options, gate })
+      .split("\n")
+      .filter((l) => /#\d+ /.test(l))
+      .map((l) => [...l][0]);
+    expect(heads).toEqual(["🟢", "🔴", "🔴", "⚪", "⚪", "⚪", "⚪", "⚪", "⚪"]);
+  });
+
+  test("a merge that GitHub blocks waits for others, below the divider", () => {
+    const text = firstPage([
+      approved({ mergeState: "blocked", pendingReviewers: ["backend"] }),
+      minePr({ mergeState: "dirty" }),
+    ]);
+    expect(text.indexOf("Waiting on others")).toBeLessThan(text.indexOf("GitHub blocks the merge"));
+  });
+});
+
 describe("the divider", () => {
   test("separates what needs you from what only waits, and counts the second group", () => {
     const text = firstPage([
@@ -157,7 +187,7 @@ describe("the divider", () => {
     ]);
     expect(text).toContain("Waiting on others · 2");
     expect(text.indexOf("🔴")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("Waiting on others")).toBeLessThan(text.indexOf("⏳"));
+    expect(text.indexOf("Waiting on others")).toBeLessThan(text.indexOf("⚪"));
     expect(text.match(/Waiting on others/g)).toHaveLength(1);
   });
 
@@ -166,11 +196,11 @@ describe("the divider", () => {
     expect(firstPage([minePr(), minePr()])).not.toContain("Waiting on others");
   });
 
-  test("ready PRs and fixes come before the divider, parked ones (a draft, a waiting ticket) after", () => {
+  test("ready PRs and fixes come before the divider, a draft after", () => {
     const text = firstPage([minePr({ isDraft: true }), approved(), minePr({ mergeState: "dirty" })]);
     expect(text.indexOf("🟢")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("🟠")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("📝")).toBeGreaterThan(text.indexOf("Waiting on others"));
+    expect(text.indexOf("🔴")).toBeLessThan(text.indexOf("Waiting on others"));
+    expect(text.indexOf("draft")).toBeGreaterThan(text.indexOf("Waiting on others"));
   });
 
   test("todo: requests and replies are yours, the rest waits", () => {
@@ -190,8 +220,8 @@ describe("todo rows", () => {
 
   test("the fixture reads as expected", () => {
     const text = plain(renderList(todo, options)[0]!);
-    expect(text).toContain("🔔 #201 PRJ-2001: add audit log\nreview requested · by alice · 0/1 · 2h");
-    expect(text).toContain("↩️ #202 PRJ-2002: rework table filters\n1 reply in your threads · by bob · 0/1 · 5d");
+    expect(text).toContain("🔴 #201 PRJ-2001: add audit log\nreview requested · by alice · 0/1 · 2h");
+    expect(text).toContain("🔴 #202 PRJ-2002: rework table filters\n1 reply in your threads · by bob · 0/1 · 5d");
   });
 
   test("a request comes before a reply, and both before waiting", () => {
@@ -201,7 +231,7 @@ describe("todo rows", () => {
     const text = render([waiting, replied, requested]);
     expect(text.indexOf("#1 ")).toBeLessThan(text.indexOf("#3 "));
     expect(text.indexOf("#3 ")).toBeLessThan(text.indexOf("#2 "));
-    expect(text).toContain("👀 #2");
+    expect(text).toContain("⚪ #2");
     expect(text).toContain("you reviewed");
   });
 

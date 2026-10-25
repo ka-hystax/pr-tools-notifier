@@ -19,7 +19,7 @@ export interface GhOptions {
   timeoutMs?: number;
   exec?: Exec;
   // `mine` must report the ticket of each PR: a gh-pr-tools that does not is too old for the Jira merge status.
-  jiraRequired?: boolean;
+  jiraRequired?: boolean | (() => boolean);
   // gh-pr-tools prints a line on stderr when it cannot do something (a rejected Jira token); the exit code stays 0.
   onWarning?: (line: string) => void;
 }
@@ -76,7 +76,8 @@ export function ghSource({
     try {
       const snapshot = parseSnapshot(raw);
       if (snapshot.command !== command) throw new Error(`expected a ${command} snapshot, got ${snapshot.command}`);
-      if (jiraRequired && snapshot.command === "mine" && snapshot.prs.some((pr) => pr.jira === undefined)) {
+      const needsJira = typeof jiraRequired === "function" ? jiraRequired() : jiraRequired;
+      if (needsJira && snapshot.command === "mine" && snapshot.prs.some((pr) => pr.jira === undefined)) {
         throw new Error("gh-pr-tools does not report Jira tickets (needed for MERGE_STATUS)");
       }
       return snapshot;
