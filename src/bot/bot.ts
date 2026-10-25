@@ -62,7 +62,8 @@ I message you when something changes in your PRs. You can also ask me:
 ℹ️ /status — what I am watching
 ⚙️ /settings — poll interval and Jira merge status
 
-An answer stays on screen until you ask for something else.`;
+An answer stays on screen until you ask for something else.
+<i>This message holds the buttons below; /help brings them back if they go.</i>`;
 
 const ERROR_MAX = 300;
 // A question the bot asked ("send the Jira status") is forgotten after this long.
@@ -128,10 +129,7 @@ export class Bot {
     try {
       await api.setMyCommands(BOT_COMMANDS);
       await this.live.clearLeftovers();
-      if (!this.deps.state.load().intro) {
-        await this.live.show(HELP, [], { keyboard: KEYBOARD });
-        this.deps.state.save({ ...this.deps.state.load(), intro: true });
-      }
+      if (this.deps.state.load().menu === null) await this.showMenu();
     } catch (err) {
       if (signal.aborted) return;
       log.warn(`bot setup: ${errorMessage(err)}`);
@@ -207,10 +205,27 @@ export class Bot {
     } else if (action === "settings") {
       const { text, buttons } = settingsScreen(this.settingsView());
       await this.live.show(text, buttons, { replaces });
+    } else if (action === "help") {
+      await this.showMenu(replaces);
     } else {
-      const text = action === "unknown" ? `🤷 I did not get that.\n\n${HELP}` : HELP;
-      await this.live.show(text, [], { replaces, keyboard: KEYBOARD });
+      await this.live.show("🤷 I did not get that. The buttons below and /help show what I can do.", [[CLOSE]], {
+        replaces,
+      });
     }
+  }
+
+  // The help message carries the keyboard and is not an answer: answers replace each other, this one stays,
+  // because Telegram takes a keyboard away together with the message that brought it. A new one moves it down.
+  private async showMenu(replaces?: number): Promise<void> {
+    const previous = this.deps.state.load().menu;
+    const { messageId } = await this.deps.api.sendMessage({ chatId: this.deps.chatId, text: HELP, keyboard: KEYBOARD });
+    try {
+      this.deps.state.save({ ...this.deps.state.load(), menu: messageId });
+    } catch (err) {
+      this.deps.log.warn(`could not save the bot state: ${errorMessage(err)}`);
+    }
+    if (previous !== null) await this.live.remove(previous);
+    if (replaces !== undefined) await this.live.remove(replaces);
   }
 
   private settingsView(note?: string): SettingsView {

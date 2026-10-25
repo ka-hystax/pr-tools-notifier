@@ -363,10 +363,38 @@ describe("help and status", () => {
     expect(h.api.deleted).toEqual([11]);
   });
 
-  test("an unknown message gets the help with a hint", async () => {
+  test("the menu outlives the answers, so the keyboard stays", async () => {
+    const h = harness();
+    await h.bot.handle(h.message("/help", 11));
+    const menu = h.api.sent[0]!.id;
+    await h.bot.handle(h.message("/mine", 12));
+    await h.bot.handle(h.message("/todo", 13));
+    await h.bot.handle(h.message("/status", 14));
+    await h.bot.handle(h.tap("x", h.api.sent.at(-1)!.id));
+    expect(h.api.deleted).not.toContain(menu);
+    expect(h.state.load().menu).toBe(menu);
+  });
+
+  test("/help moves the menu down: the new one first, then the old one goes", async () => {
+    const h = harness();
+    await h.bot.handle(h.message("/help", 11));
+    const first = h.api.sent[0]!.id;
+    await h.bot.handle(h.message("/mine", 12));
+    const list = h.api.sent[1]!.id;
+    await h.bot.handle(h.message("/help", 13));
+    const second = h.api.sent[2]!.id;
+    expect(h.api.sent[2]!.params.keyboard).toEqual(KEYBOARD);
+    expect(h.api.deleted).toEqual([11, 12, first, 13]);
+    expect(h.api.deleted).not.toContain(list);
+    expect(h.state.load()).toEqual({ menu: second, view: [list] });
+  });
+
+  test("an unknown message gets a short hint, not a second menu", async () => {
     const h = harness();
     await h.bot.handle(h.message("what", 11));
     expect(h.texts()[0]).toMatch(/^🤷 I did not get that\./);
+    expect(h.api.sent[0]!.params.keyboard).toBeUndefined();
+    expect(buttonData(h.api.sent[0]!.params)).toEqual(["x"]);
   });
 
   test("/status shows the profile, the last polls and the settings", async () => {
@@ -389,7 +417,7 @@ describe("help and status", () => {
 });
 
 describe("run", () => {
-  test("registers the commands, introduces itself once and stops on abort", async () => {
+  test("registers the commands, sends the menu with the keyboard once and stops on abort", async () => {
     const h = harness();
     const done = h.bot.run();
     await new Promise((r) => setTimeout(r, 20));
@@ -398,24 +426,24 @@ describe("run", () => {
     expect(h.api.commands).toEqual(BOT_COMMANDS);
     expect(h.texts()).toHaveLength(1);
     expect(h.api.sent[0]!.params.keyboard).toEqual(KEYBOARD);
-    expect(h.state.load().intro).toBe(true);
+    expect(h.state.load().menu).toBe(h.api.sent[0]!.id);
   });
 
-  test("does not introduce itself again, and takes down the answer a previous run left", async () => {
+  test("does not send the menu again, and takes down the answer a previous run left", async () => {
     const h = harness();
-    h.state.save({ intro: true, view: [77] });
+    h.state.save({ menu: 5, view: [77] });
     const done = h.bot.run();
     await new Promise((r) => setTimeout(r, 20));
     h.controller.abort();
     await done;
     expect(h.api.sent).toEqual([]);
     expect(h.api.deleted).toEqual([77]);
-    expect(h.state.load().view).toEqual([]);
+    expect(h.state.load()).toEqual({ menu: 5, view: [] });
   });
 
   test("handles updates in order, confirming each by moving the offset", async () => {
     const h = harness();
-    h.state.save({ intro: true, view: [] });
+    h.state.save({ menu: 1, view: [] });
     h.api.polls.push([h.message("/mine", 5), h.message("/todo", 6)]);
     const done = h.bot.run();
     await new Promise((r) => setTimeout(r, 30));
@@ -427,7 +455,7 @@ describe("run", () => {
 
   test("one command failing does not stop the next", async () => {
     const h = harness();
-    h.state.save({ intro: true, view: [] });
+    h.state.save({ menu: 1, view: [] });
     h.api.failSend = new TelegramError("sendMessage: 502 Bad Gateway", 502);
     h.api.polls.push([h.message("/mine", 5), h.message("/status", 6)]);
     const done = h.bot.run();
@@ -441,7 +469,7 @@ describe("run", () => {
 
   test("gives up when Telegram says another reader has the bot", async () => {
     const h = harness();
-    h.state.save({ intro: true, view: [] });
+    h.state.save({ menu: 1, view: [] });
     h.api.polls.push(new TelegramError("getUpdates: 409 Conflict: terminated by other getUpdates request", 409));
     await h.bot.run();
     expect(h.logs.some((l) => l.startsWith("error: commands are off") && l.includes("another program reads"))).toBe(true);
@@ -449,7 +477,7 @@ describe("run", () => {
 
   test("keeps trying after a network failure", async () => {
     const h = harness();
-    h.state.save({ intro: true, view: [] });
+    h.state.save({ menu: 1, view: [] });
     h.api.polls.push(new TelegramError("getUpdates: network error: offline", null));
     const done = h.bot.run();
     await new Promise((r) => setTimeout(r, 30));

@@ -159,8 +159,8 @@ function waitingFor(reviewers: string[]): string {
   return reviewers.length > 0 ? `waiting for review from ${names(reviewers)}` : "a required review or check is missing";
 }
 
-function joinItems(items: string[], word = "and"): string {
-  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} ${word} ${items.at(-1)}`;
+function joinItems(items: string[]): string {
+  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 export function ticketLink(ticket: JiraTicket): string {
@@ -188,7 +188,7 @@ function verdict(status: MergeStatus, prUrl: string): string | null {
     case "github_blocked":
       return `🚧 GitHub blocks the merge: ${waitingFor(status.waitingFor)}`;
     case "waiting_jira":
-      return `⏳ <b>Review passed</b> · waiting for ${ticketLink(status.ticket)} to reach ${joinItems(status.wanted.map(italic), "or")} (${ticketNow(status.ticket)})`;
+      return `⏳ <b>Review passed</b> · waiting for ${ticketLink(status.ticket)} to reach the merge status (${ticketNow(status.ticket)})`;
     case "todo": {
       const items: string[] = [];
       const { pendingThreads, firstPendingThreadUrl } = status;

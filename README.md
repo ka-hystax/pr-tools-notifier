@@ -75,35 +75,44 @@ With one gh-pr-tools profile that is all; with several, say which: `run -p PROFI
 
 While `run` is going, the bot also answers you. It has buttons under the input field and a `/` menu:
 
-| Command     | Answer                                                                                         |
-| ----------- | ---------------------------------------------------------------------------------------------- |
-| `/todo`     | PRs waiting for your review: requested, replied to, or just waiting                            |
-| `/mine`     | your open PRs, what to do next for each; what needs you first, what only waits below a divider |
-| `/status`   | the profile, the last poll and the settings                                                    |
-| `/settings` | view and change the poll interval and the Jira merge status                                    |
-| `/help`     | what the bot can do (`/start` shows it too)                                                    |
+| Command     | Answer                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `/todo`     | PRs where you are a reviewer: 🔔 your turn (review requests, replies in your threads), then ⏳ waiting for authors |
+| `/mine`     | your open PRs: ✅ approved (ready, or one fix away), then 👀 in review                                             |
+| `/status`   | the profile, the last poll and the settings                                                                        |
+| `/settings` | view and change the poll interval and the Jira merge status                                                        |
+| `/help`     | what the bot can do (`/start` shows it too)                                                                        |
 
 ```
-📤 Mine · 3 PRs · 10:00
+📤 Mine · 5 PRs · 15:49
 
-🟢 #1281 Localization
-ready to merge · 2/2 · 3d
+✅ Approved · 2
 
-🔴 #1216 PRJ-1865. Fix the date picker
-changes requested by bob · CI failed · 2 threads · 1/2 · 4d
+#1216 PRJ-1865. Add CSV export…
+🟢 ready to merge · 2/2 · 22d
 
-Waiting on others · 1
+#1281 PRJ-1824. Translate the settings page…
+❌ CI failed · 🔀 conflicts · 3/2 · 3d
 
-⚪ #1289 PRJ-1992. Raise the upload limit
-waiting for carol, backend · 0/2 · 1d
+
+👀 In review · 3
+
+#1291 PRJ-1826. Cache the model limits…
+💬 2 open threads · 2/2 · 29h
+
+#1289 PRJ-1992. Fix the table search…
+⏳ review from ui, dave · 0/2 · 2d
+
+#1295 PRJ-1993. Keep the date range in the URL…
+📝 draft · 0/2 · 34m
                                           [🔄 Refresh] [✖ Close]
 ```
 
-Each row starts with one of three circles that answer whose move it is: 🟢 merge it, 🔴 your move (CI, requested changes, threads, a rebase; in `/todo` a review request or a reply), ⚪ waiting for others (reviewers, CI, GitHub, the Jira ticket, a draft). The text next to it says what exactly.
+`/mine` puts a PR under **Approved** when it has enough approvals (stale ones count), no open threads, no requested changes, and GitHub is not waiting for a required review. A failed build, conflicts or a waiting Jira ticket keep it there: it is one fix or one wait away. Everything else is **In review**, with what you can answer first. `/todo` puts review requests and replies in your threads under **Your turn**, and the rest under **Waiting for authors** with your own verdict (`✅ you approved, new commits since`). The icons are the ones notifications use: ❌ CI, 🔀 conflicts, 💬 threads, 🔄 requested changes, ⏳ waiting, 🚧 GitHub blocks, 🎫 Jira, 📝 draft.
 
 A list comes from the last poll when that is under two minutes old, otherwise from a fresh request (a few seconds; if GitHub cannot be reached, the last poll is shown with a note). `🔄 Refresh` asks again without touching what the notifications are compared against. Long lists get `Next ▶` and `◀ Prev`.
 
-The bot keeps one answer on screen: asking for something else, or pressing `✖ Close`, takes the previous answer and your own command message down, so the chat holds notifications and the latest view, never old lists. Notifications are not deleted.
+The bot keeps one answer on screen: asking for something else, or pressing `✖ Close`, takes the previous answer and your own command message down, so the chat holds notifications and the latest view, never old lists. Notifications are not deleted, and neither is the help message that holds the buttons, since Telegram removes a keyboard together with its message; `/help` brings a fresh one to the bottom.
 
 Only the chat you connected is heard; messages from anyone else are ignored (the terminal says so once). A command older than two minutes, for example one sent while the laptop slept, is dropped instead of answered late. Only one `run` reads the bot's messages (`state/bot.lock`); another `run` for a different profile still sends its notifications.
 
@@ -117,9 +126,9 @@ pr-tools-notifier config set merge-status Merge
 
 or in Telegram: `/settings` → `🎫 Jira status`, then send `Merge` as a message.
 
-An approval that clears every blocker then says `⏳ Review passed · waiting for PRJ-1826 to reach Merge (now: In Review)` instead of 🎉. When the ticket reaches the status, the 🎉 `Time to merge!` follows. If something still blocks the PR at that moment, the message lists it instead (`📌 PRJ-1826 moved to Merge`, `🚧 Before merge resolve 2 threads…`), and once the blockers are gone a second 🎉 says `PRJ-1826 is in Merge · no blockers left`. Several statuses can be given, separated by commas; names are compared without regard to case. See [Settings](#settings).
+An approval that clears every blocker then says `⏳ Review passed · waiting for PRJ-1826 to reach the merge status (now: In Review)` instead of 🎉. When the ticket reaches the status, the 🎉 `Time to merge!` follows. If something still blocks the PR at that moment, the message lists it instead (`📌 PRJ-1826 moved to Merge`, `🚧 Before merge resolve 2 threads…`), and once the blockers are gone a second 🎉 says `PRJ-1826 is in Merge · no blockers left`. Several statuses can be given, separated by commas; names are compared without regard to case. They are the ticket's status names as Jira shows them on the ticket (in your Jira language), not the names of the board columns. See [Settings](#settings).
 
-The ticket comes from gh-pr-tools, which already knows how to read Jira, so the notifier needs no credentials of its own. It takes the ticket key from the branch name (`bug/PRJ-1865`) and reads its status with the Jira token of your profile. Without one, add it once:
+The ticket comes from gh-pr-tools, which already knows how to read Jira, so the notifier needs no credentials of its own. It takes the ticket key from the branch name (`bug/PRJ-1865`) or, failing that, the title (`PRJ-1865. Fix …`) and reads its status with the Jira token of your profile. Without one, add it once:
 
 ```bash
 gh pr-tools -p PROFILE profile set jira-site yourorg
@@ -127,7 +136,7 @@ gh pr-tools -p PROFILE profile set jira-email you@example.com
 gh pr-tools -p PROFILE profile set jira-api-token      # prompts, hidden
 ```
 
-See the [Jira token](https://github.com/ek-hystax/gh-pr-tools#jira-token) section of gh-pr-tools for how to create the token. PRs whose branch has no ticket key are announced as before. Without the token, the terminal warns `no Jira status came back` and the messages say `Jira status unavailable`, since the notifier cannot know whether the ticket is ready.
+See the [Jira token](https://github.com/ek-hystax/gh-pr-tools#jira-token) section of gh-pr-tools for how to create the token. PRs with no ticket key in the branch or the title are announced as before. Without the token, the terminal warns `no Jira status came back` and the messages say `Jira status unavailable`, since the notifier cannot know whether the ticket is ready.
 
 ### Settings
 

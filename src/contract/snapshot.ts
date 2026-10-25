@@ -70,7 +70,7 @@ const pullRequestShape = {
 export const MergeStateSchema = z.enum(["clean", "dirty", "behind", "blocked", "unstable", "draft", "has_hooks", "unknown"]); // GitHub mergeStateStatus, lowercased; dirty = conflicts
 export type MergeState = z.infer<typeof MergeStateSchema>;
 
-// The ticket named by the branch. status: null = no Jira token, a failed lookup or an invisible ticket; url: null = no site.
+// The ticket named by the branch, or else the title. status: null = no Jira token, a failed lookup or an invisible ticket; url: null = no site.
 export const JiraTicketSchema = z.object({
   key: z.string().min(1),
   url: z.string().nullable(),
@@ -83,7 +83,7 @@ export const MinePullRequestSchema = z.object({
   ci: CiSchema,
   mergeState: MergeStateSchema,
   pendingReviewers: z.array(z.string()), // users (login) and teams (name) whose review is still requested
-  jira: JiraTicketSchema.nullable().optional(), // null = no ticket in the branch; absent = a gh-pr-tools without Jira
+  jira: JiraTicketSchema.nullable().optional(), // null = no ticket in the branch or title; absent = a gh-pr-tools without Jira
 });
 export type MinePullRequest = z.infer<typeof MinePullRequestSchema>;
 

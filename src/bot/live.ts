@@ -24,13 +24,8 @@ export class LiveView {
   }
 
   // Sends the new answer first, so the screen never goes blank, then takes the old ones down.
-  async show(
-    text: string,
-    buttons: ApiButton[][],
-    options: { replaces?: number; keyboard?: string[][] } = {}
-  ): Promise<number> {
+  async show(text: string, buttons: ApiButton[][], options: { replaces?: number } = {}): Promise<number> {
     const params: SendParams = { chatId: this.chatId, text, buttons };
-    if (options.keyboard) params.keyboard = options.keyboard;
     const { messageId } = await this.api.sendMessage(params);
     const previous = this.messageId;
     this.messageId = messageId;

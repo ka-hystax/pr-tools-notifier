@@ -410,14 +410,14 @@ describe("Jira merge gate", () => {
     const [text] = fmt([approved("carol", met, waiting())]);
     expect(text).toContain("✅ <b>carol</b> approved · 2/2\n");
     expect(text).toContain(
-      '⏳ <b>Review passed</b> · waiting for <a href="https://jira.example.com/browse/PRJ-1001">PRJ-1001</a> to reach <i>Merge</i> (now: <i>In Review</i>)'
+      '⏳ <b>Review passed</b> · waiting for <a href="https://jira.example.com/browse/PRJ-1001">PRJ-1001</a> to reach the merge status (now: <i>In Review</i>)'
     );
   });
 
-  test("names every status that would do, and says when the status is unknown", () => {
-    expect(fmt([passed(waiting({}, ["Merge", "Ready to merge"]))])[0]).toContain(
-      "to reach <i>Merge</i> or <i>Ready to merge</i> ("
-    );
+  test("does not list the merge statuses, however many there are, and says when the status is unknown", () => {
+    const text = fmt([passed(waiting({}, ["Merge", "Ready to merge"]))])[0]!;
+    expect(text).toContain("to reach the merge status (");
+    expect(text).not.toContain("Ready to merge");
     expect(fmt([passed(waiting({ status: null }))])[0]).toContain("(Jira status unavailable)");
   });
 

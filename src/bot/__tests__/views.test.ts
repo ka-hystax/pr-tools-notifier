@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseSnapshot, type MineSnapshot, type TodoSnapshot } from "../../contract/snapshot.js";
+import { parseSnapshot, type MineSnapshot, type Review, type Thread, type TodoSnapshot } from "../../contract/snapshot.js";
 import { readFixture } from "../../__tests__/fixtures.js";
 import { MAX_MESSAGE_LENGTH } from "../../format/format.js";
 import { ago, renderList } from "../views.js";
@@ -48,93 +48,181 @@ describe("ago", () => {
   });
 });
 
-describe("mine rows", () => {
-  test("the fixture reads as expected, most broken first", () => {
+const thread = (over: Partial<Thread> = {}): Thread => ({
+  id: "T",
+  state: "pending",
+  opener: "alice",
+  lastAuthor: "alice",
+  watched: false,
+  commentCount: 1,
+  path: null,
+  url: "https://t/1",
+  lastCommentAt: "2026-10-13T09:00:00Z",
+  excerpt: "",
+  ...over,
+});
+
+// The rows of a block, as plain text, in order.
+function block(text: string, title: string): string[] {
+  const start = text.indexOf(`${title} · `);
+  if (start < 0) return [];
+  const rest = text
+    .slice(start)
+    .split("\n\n")
+    .slice(1)
+    .map((part) => part.replace(/^\n/, ""));
+  const end = rest.findIndex((part) => /^(✅ Approved|👀 In review|🔔 Your turn|⏳ Waiting for authors) · \d+/.test(part));
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+describe("mine: the two blocks", () => {
+  test("the fixture is all in review: changes, threads and a broken build first, a draft last", () => {
     const text = plain(renderList(mine, options)[0]!);
-    expect(text).toMatch(/^📤 Mine · 3 PRs · 10:00\n\n🔴 #101 /);
-    expect(text).toContain("changes requested by bob · CI failed · 2 threads · needs a rebase · 1/2 · 4d");
-    expect(text).toContain("⚪ #102 PRJ-1002: fix locale fallback\nneeds approval · 0/2 · 3d");
-    expect(text).toContain("⚪ #103 PRJ-1003: migrate settings page\ndraft");
+    expect(text).toMatch(
+      /^📤 Mine · 3 PRs · 10:00\n\n✅ Approved · 0\n\nNo PR has enough approvals yet\.\n\n\n👀 In review · 3\n\n/
+    );
+    expect(block(text, "👀 In review")).toEqual([
+      "#101 PRJ-1001: add export button\n🔄 changes requested by bob · 💬 2 open threads · ❌ CI failed · 🔀 conflicts · ⏳ review from backend · 1/2 · 4d",
+      "#102 PRJ-1002: fix locale fallback\n⏳ needs approvals · 0/2 · 3d",
+      "#103 PRJ-1003: migrate settings page\n📝 draft · 1/2 (1 stale) · 2d",
+    ]);
   });
 
-  test("an approved, clean PR is ready to merge and comes first", () => {
-    const text = firstPage([minePr({ ci: { state: "fail", failedJobs: ["x"] } }), approved()]);
-    expect(text.indexOf("🟢")).toBeGreaterThan(-1);
-    expect(text.indexOf("🟢")).toBeLessThan(text.indexOf("🔴"));
-    expect(text).toContain("ready to merge · 2/2");
+  test("two empty lines separate the blocks, one separates the rows", () => {
+    const [html] = listOf([approved(), approved(), minePr()]);
+    expect(html).toMatch(/2\/2 · \d+d\n\n\n<b>👀 In review · 1<\/b>\n\n<a /);
+    expect(html).toMatch(/<b>✅ Approved · 2<\/b>\n\n<a [^\n]+\n[^\n]+\n\n<a /);
   });
 
-  test("lists what to fix, linking the checks and the first pending thread", () => {
+  test("the block headers are bold and count their rows", () => {
+    const [html] = listOf([approved(), minePr()]);
+    expect(html).toContain("<b>✅ Approved · 1</b>");
+    expect(html).toContain("<b>👀 In review · 1</b>");
+    expect(html!.indexOf("✅ Approved")).toBeLessThan(html!.indexOf("👀 In review"));
+  });
+
+  test("enough approvals and nothing in the way: ready to merge", () => {
+    expect(block(firstPage([approved()]), "✅ Approved")).toEqual([
+      expect.stringMatching(/\n🟢 ready to merge · 2\/2 · \d+d$/),
+    ]);
+  });
+
+  test("approved with a failed build, conflicts or a stale branch stays under Approved: one fix away", () => {
+    const text = firstPage([
+      approved({ ci: { state: "fail", failedJobs: ["build"] } }),
+      approved({ mergeState: "dirty" }),
+      approved({ mergeState: "behind" }),
+    ]);
+    expect(block(text, "✅ Approved").map((r) => r.split("\n")[1]!.split(" · ")[0])).toEqual([
+      "❌ CI failed",
+      "🔀 conflicts",
+      "🔀 needs a rebase",
+    ]);
+    expect(text).not.toContain("In review");
+  });
+
+  test("an empty Approved block still shows, saying so; an empty In review block is left out", () => {
+    const [html] = listOf([minePr()]);
+    expect(html).toContain("<b>✅ Approved · 0</b>\n\n<i>No PR has enough approvals yet.</i>\n\n\n<b>👀 In review · 1</b>");
+  });
+
+  test("approved but with open threads goes to In review", () => {
+    const text = firstPage([approved({ threads: [thread()] })]);
+    expect(block(text, "👀 In review")).toEqual([expect.stringContaining("💬 1 open thread · 2/2")]);
+  });
+
+  test("approved but GitHub waits for a code owner goes to In review", () => {
+    const text = firstPage([
+      approved({ mergeState: "blocked", pendingReviewers: ["backend"] }),
+      approved({ mergeState: "blocked" }),
+    ]);
+    expect(block(text, "👀 In review")).toEqual([
+      expect.stringContaining("🚧 review from backend · 2/2"),
+      expect.stringContaining("🚧 GitHub blocks the merge · 2/2"),
+    ]);
+  });
+
+  test("requested changes keep a PR in review even with enough approvals", () => {
+    const pr = approved({
+      approval: { ...base.approval, approvers: ["a", "b"], changesRequestedBy: ["bob"], decision: "approved" },
+    });
+    expect(block(firstPage([pr]), "👀 In review")).toEqual([expect.stringContaining("🔄 changes requested by bob")]);
+  });
+
+  test("Approved: ready first, then fixes, then CI or GitHub, then the Jira ticket", () => {
+    const gate = { statuses: ["Merge"] };
+    const text = firstPage(
+      [
+        approved({ jira: { key: "PRJ-1", url: null, status: "Approved" } }),
+        approved({ ci: { state: "pending", failedJobs: [] } }),
+        approved({ mergeState: "dirty" }),
+        approved(),
+        approved({ mergeState: "unknown" }),
+      ],
+      { ...options, gate }
+    );
+    expect(block(text, "✅ Approved").map((r) => r.split("\n")[1]!.split(" · ")[0])).toEqual([
+      "🟢 ready to merge",
+      "🔀 conflicts",
+      "⏳ CI running",
+      "⏳ GitHub is checking the branch",
+      "🎫 waiting for the merge status (Approved)",
+    ]);
+  });
+
+  test("In review: changes, then threads or a broken build, then reviewers, drafts last", () => {
+    const text = firstPage([
+      minePr({ isDraft: true }),
+      minePr({ pendingReviewers: ["carol"] }),
+      minePr({ threads: [thread()] }),
+      minePr({ approval: { ...base.approval, changesRequestedBy: ["bob"] } }),
+    ]);
+    expect(block(text, "👀 In review").map((r) => r.split("\n")[1]!.split(" · ")[0])).toEqual([
+      "🔄 changes requested by bob",
+      "💬 1 open thread",
+      "⏳ review from carol",
+      "📝 draft",
+    ]);
+  });
+
+  test("links the checks and the oldest open thread", () => {
     const [html] = listOf([
       minePr({
         ci: { state: "fail", failedJobs: ["build"] },
         threads: [
-          {
-            id: "A",
-            state: "pending",
-            opener: "x",
-            lastAuthor: "x",
-            watched: false,
-            commentCount: 1,
-            path: null,
-            url: "https://t/late",
-            lastCommentAt: "2026-10-13T10:00:00Z",
-            excerpt: "",
-          },
-          {
-            id: "B",
-            state: "pending",
-            opener: "x",
-            lastAuthor: "x",
-            watched: false,
-            commentCount: 1,
-            path: null,
-            url: "https://t/early",
-            lastCommentAt: "2026-10-13T09:00:00Z",
-            excerpt: "",
-          },
+          thread({ id: "A", url: "https://t/late", lastCommentAt: "2026-10-13T10:00:00Z" }),
+          thread({ id: "B", url: "https://t/early" }),
         ],
       }),
     ]);
-    expect(html).toContain('<a href="https://github.com/acme/web/pull/1');
-    expect(html).toMatch(/<a href="[^"]+\/checks">CI failed<\/a>/);
-    expect(html).toContain('<a href="https://t/early">2 threads</a>');
+    expect(html).toMatch(/❌ <a href="[^"]+\/checks">CI failed<\/a>/);
+    expect(html).toContain('💬 <a href="https://t/early">2 open threads</a>');
   });
 
-  test("anything to fix is red: a rebase, a thread, CI or requested changes", () => {
-    expect(firstPage([minePr({ mergeState: "dirty" })])).toContain("🔴");
-    expect(firstPage([minePr({ ci: { state: "fail", failedJobs: [] } })])).toContain("🔴");
+  test("a waiting Jira ticket names its status once, linked", () => {
+    const gate = { statuses: ["Merge", "Слияние"] };
+    const [html] = listOf([approved({ jira: { key: "PRJ-1", url: "https://j/browse/PRJ-1", status: "Подтверждено" } })], {
+      ...options,
+      gate,
+    });
+    expect(html).toContain('🎫 waiting for the merge status (<a href="https://j/browse/PRJ-1">Подтверждено</a>) · 2/2 ·');
+    expect(html!.match(/Подтверждено/g)).toHaveLength(1);
+    const unknown = firstPage([approved({ jira: { key: "PRJ-1", url: null, status: null } })], { ...options, gate });
+    expect(unknown).toContain("🎫 waiting for the merge status (Jira status unavailable)");
+    expect(unknown).not.toContain("Слияние");
   });
 
-  test("names who a PR waits for", () => {
-    expect(firstPage([minePr({ pendingReviewers: ["carol", "backend"] })])).toContain("waiting for carol, backend");
-  });
-
-  test("an approved PR that GitHub still blocks, checks or runs CI for", () => {
-    expect(firstPage([approved({ mergeState: "blocked", pendingReviewers: ["backend"] })])).toContain("⚪ #");
-    expect(firstPage([approved({ mergeState: "blocked", pendingReviewers: ["backend"] })])).toContain(
-      "GitHub blocks the merge: waiting for backend"
-    );
-    expect(firstPage([approved({ mergeState: "unknown" })])).toContain("GitHub is checking the branch");
-    expect(firstPage([approved({ ci: { state: "pending", failedJobs: [] } })])).toContain("CI is running");
-  });
-
-  test("shows the ticket status, linked", () => {
-    const [html] = listOf([minePr({ jira: { key: "PRJ-1", url: "https://j/browse/PRJ-1", status: "In Review" } })]);
-    expect(html).toContain('🎫 <a href="https://j/browse/PRJ-1">In Review</a>');
-  });
-
-  test("with a Jira merge status, an approved PR waits for the ticket and then is ready", () => {
+  test("a ticket already in the merge status is ready, with its status as a chip", () => {
     const gate = { statuses: ["Merge"] };
-    const waiting = approved({ jira: { key: "PRJ-1", url: null, status: "Approved" } });
-    expect(firstPage([waiting], { ...options, gate })).toMatch(
-      /⚪ #\d+ [^\n]+\nreview passed · waiting for Merge \(now: Approved\)/
-    );
-    const there = approved({ jira: { key: "PRJ-1", url: null, status: "merge" } });
-    expect(firstPage([there], { ...options, gate })).toContain("🟢");
-    const unknown = approved({ jira: { key: "PRJ-1", url: null, status: null } });
-    expect(firstPage([unknown], { ...options, gate })).toContain("Jira status unavailable");
-    expect(firstPage([waiting], options)).toContain("🟢");
+    const text = firstPage([approved({ jira: { key: "PRJ-1", url: null, status: "merge" } })], { ...options, gate });
+    expect(text).toContain("🟢 ready to merge · 2/2 · 🎫 merge · ");
+  });
+
+  test("without a gate the ticket is only a chip, in either block", () => {
+    const jira = { key: "PRJ-1", url: "https://j/browse/PRJ-1", status: "In Review" };
+    const [html] = listOf([approved({ jira }), minePr({ jira })]);
+    expect(html!.match(/🎫 <a href="https:\/\/j\/browse\/PRJ-1">In Review<\/a>/g)).toHaveLength(2);
+    expect(html).toContain("🟢 ready to merge");
   });
 
   test("escapes titles", () => {
@@ -148,95 +236,71 @@ describe("mine rows", () => {
   });
 });
 
-describe("the circles", () => {
-  test("every row starts with one of three: merge it, your move, or waiting for others", () => {
-    const gate = { statuses: ["Merge"] };
-    const rows = [
-      approved(),
-      minePr({ ci: { state: "fail", failedJobs: [] } }),
-      minePr({ mergeState: "behind" }),
-      minePr({ pendingReviewers: ["carol"] }),
-      approved({ mergeState: "blocked" }),
-      approved({ mergeState: "unknown" }),
-      approved({ ci: { state: "pending", failedJobs: [] } }),
-      approved({ jira: { key: "PRJ-1", url: null, status: "Approved" } }),
-      minePr({ isDraft: true }),
-    ];
-    const heads = firstPage(rows, { ...options, gate })
-      .split("\n")
-      .filter((l) => /#\d+ /.test(l))
-      .map((l) => [...l][0]);
-    expect(heads).toEqual(["🟢", "🔴", "🔴", "⚪", "⚪", "⚪", "⚪", "⚪", "⚪"]);
-  });
-
-  test("a merge that GitHub blocks waits for others, below the divider", () => {
-    const text = firstPage([
-      approved({ mergeState: "blocked", pendingReviewers: ["backend"] }),
-      minePr({ mergeState: "dirty" }),
-    ]);
-    expect(text.indexOf("Waiting on others")).toBeLessThan(text.indexOf("GitHub blocks the merge"));
-  });
-});
-
-describe("the divider", () => {
-  test("separates what needs you from what only waits, and counts the second group", () => {
-    const text = firstPage([
-      minePr({ pendingReviewers: ["carol"] }),
-      minePr({ ci: { state: "fail", failedJobs: [] } }),
-      minePr(),
-    ]);
-    expect(text).toContain("Waiting on others · 2");
-    expect(text.indexOf("🔴")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("Waiting on others")).toBeLessThan(text.indexOf("⚪"));
-    expect(text.match(/Waiting on others/g)).toHaveLength(1);
-  });
-
-  test("is left out when everything needs you or everything waits", () => {
-    expect(firstPage([minePr({ ci: { state: "fail", failedJobs: [] } }), approved()])).not.toContain("Waiting on others");
-    expect(firstPage([minePr(), minePr()])).not.toContain("Waiting on others");
-  });
-
-  test("ready PRs and fixes come before the divider, a draft after", () => {
-    const text = firstPage([minePr({ isDraft: true }), approved(), minePr({ mergeState: "dirty" })]);
-    expect(text.indexOf("🟢")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("🔴")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("draft")).toBeGreaterThan(text.indexOf("Waiting on others"));
-  });
-
-  test("todo: requests and replies are yours, the rest waits", () => {
-    const requested = { ...structuredClone(todo.prs[0]!), number: 1, requestedFromMe: true, threads: [] };
-    const waiting = { ...structuredClone(todo.prs[0]!), number: 2, requestedFromMe: false, threads: [] };
-    const text = plain(renderList({ ...todo, prs: [waiting, requested] }, options)[0]!);
-    expect(text).toContain("Waiting on others · 1");
-    expect(text.indexOf("#1 ")).toBeLessThan(text.indexOf("Waiting on others"));
-    expect(text.indexOf("#2 ")).toBeGreaterThan(text.indexOf("Waiting on others"));
-  });
-});
-
-describe("todo rows", () => {
-  // prs[0] has no threads of mine; prs[1] has a reply from the author.
+describe("todo: the two blocks", () => {
+  // prs[0] is a plain review request; prs[1] has a reply from the author in the viewer's thread.
   const todoPr = (over: Partial<TodoPr> = {}, from = 0): TodoPr => ({ ...structuredClone(todo.prs[from]!), ...over });
   const render = (prs: TodoPr[]) => plain(renderList({ ...todo, prs }, options)[0]!);
+  const review = (
+    state: Review["state"],
+    at: string,
+    commitOid: string | null = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ): Review => ({
+    id: `R${at}`,
+    author: "dev-me",
+    state,
+    submittedAt: `2026-10-13T0${at}:00:00Z`,
+    commitOid,
+  });
+  const waitingLine = (over: Partial<TodoPr>) =>
+    block(render([todoPr({ requestedFromMe: false, ...over })]), "⏳ Waiting for authors")[0]!.split("\n")[1]!;
 
-  test("the fixture reads as expected", () => {
-    const text = plain(renderList(todo, options)[0]!);
-    expect(text).toContain("🔴 #201 PRJ-2001: add audit log\nreview requested · by alice · 0/1 · 2h");
-    expect(text).toContain("🔴 #202 PRJ-2002: rework table filters\n1 reply in your threads · by bob · 0/1 · 5d");
+  test("the fixture: a request first, then a reply, both your turn", () => {
+    const text = render(todo.prs);
+    expect(text).toMatch(/^📥 Todo · 2 PRs · 10:00\n\n🔔 Your turn · 2\n\n/);
+    expect(block(text, "🔔 Your turn")).toEqual([
+      "#201 PRJ-2001: add audit log\n🔔 review requested · by alice · 0/1 · 2h",
+      "#202 PRJ-2002: rework table filters\n↩️ 1 reply in your threads · by bob · 0/1 · 5d",
+    ]);
   });
 
-  test("a request comes before a reply, and both before waiting", () => {
-    const requested = todoPr({ number: 1, requestedFromMe: true, threads: [] });
-    const waiting = todoPr({ number: 2, requestedFromMe: false, threads: [] });
-    const replied = todoPr({ number: 3, requestedFromMe: false }, 1);
-    const text = render([waiting, replied, requested]);
-    expect(text.indexOf("#1 ")).toBeLessThan(text.indexOf("#3 "));
-    expect(text.indexOf("#3 ")).toBeLessThan(text.indexOf("#2 "));
-    expect(text).toContain("⚪ #2");
-    expect(text).toContain("you reviewed");
+  test("an empty Your turn block says that nothing needs you", () => {
+    const text = render([todoPr({ requestedFromMe: false })]);
+    expect(text).toMatch(
+      /^📥 Todo · 1 PR · 10:00\n\n🔔 Your turn · 0\n\nNothing needs you right now\.\n\n\n⏳ Waiting for authors · 1\n\n/
+    );
   });
 
-  test("a request that also has replies shows both", () => {
-    expect(render([todoPr({ requestedFromMe: true }, 1)])).toContain("review requested · 1 reply in your threads");
+  test("what waits for the author is listed under its own header", () => {
+    const text = render([todoPr({ number: 1, requestedFromMe: true }), todoPr({ number: 2, requestedFromMe: false })]);
+    expect(text).toContain("🔔 Your turn · 1");
+    expect(text).toContain("⏳ Waiting for authors · 1");
+    expect(text.indexOf("#1 ")).toBeLessThan(text.indexOf("⏳ Waiting for authors"));
+  });
+
+  test("shows your own verdict and whether commits came after it", () => {
+    expect(waitingLine({ reviews: [review("APPROVED", "9")] })).toMatch(/^✅ you approved · by alice/);
+    expect(waitingLine({ reviews: [review("APPROVED", "9", "old")] })).toMatch(/^✅ you approved, new commits since · /);
+    expect(waitingLine({ reviews: [review("CHANGES_REQUESTED", "9")] })).toMatch(/^🔄 you requested changes · /);
+    expect(waitingLine({ reviews: [review("COMMENTED", "9")] })).toMatch(/^💬 you commented · /);
+  });
+
+  test("a comment after an approval does not take the approval back; a later change request does", () => {
+    expect(waitingLine({ reviews: [review("APPROVED", "8"), review("COMMENTED", "9")] })).toMatch(/^✅ you approved/);
+    expect(waitingLine({ reviews: [review("APPROVED", "8"), review("CHANGES_REQUESTED", "9")] })).toMatch(
+      /^🔄 you requested changes/
+    );
+  });
+
+  test("open threads of yours come first, and replace a bare 'you commented'", () => {
+    const threads = [thread({ opener: "dev-me", lastAuthor: "dev-me", url: "https://t/mine" })];
+    expect(waitingLine({ threads, reviews: [review("COMMENTED", "9")] })).toMatch(/^💬 1 of your threads open · by alice/);
+    expect(waitingLine({ threads, reviews: [review("APPROVED", "9")] })).toMatch(
+      /^💬 1 of your threads open · ✅ you approved · /
+    );
+  });
+
+  test("a reviewer with nothing submitted yet", () => {
+    expect(waitingLine({ reviews: [] })).toMatch(/^👀 you are a reviewer · by alice/);
   });
 
   test("says when nothing waits for you", () => {
@@ -245,15 +309,17 @@ describe("todo rows", () => {
 });
 
 describe("pages and notes", () => {
-  test("a long list is cut into pages that each fit in a message", () => {
+  test("a long list is cut into pages that each fit in a message, and a block that goes on says so", () => {
     const prs = Array.from({ length: 60 }, () =>
       minePr({ title: "A fairly long pull request title that fills the line nicely" })
     );
     const pages = listOf(prs);
     expect(pages.length).toBeGreaterThan(1);
     for (const page of pages) expect(page.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
-    expect(plain(pages[0]!)).toMatch(/^📤 Mine · 60 PRs · 10:00 · 1\/\d+/);
-    expect(plain(pages.at(-1)!)).toContain(`· ${pages.length}/${pages.length}`);
+    expect(plain(pages[0]!)).toMatch(
+      /^📤 Mine · 60 PRs · 10:00 · 1\/\d+\n\n✅ Approved · 0\n\nNo PR has enough approvals yet\.\n\n\n👀 In review · 60\n\n/
+    );
+    expect(plain(pages[1]!)).toMatch(/\n\n👀 In review · 60 \(continued\)\n\n#/);
     expect(pages.join("").match(/#\d{4}/g)).toHaveLength(60);
   });
 
