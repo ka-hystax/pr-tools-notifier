@@ -56,6 +56,27 @@ describe("ghSource", () => {
     expect(calls[0]!.options.timeout).toBe(5_000);
   });
 
+  describe("track", () => {
+    const trackJson = readFixtureText("track");
+    const list = (hasTickets: boolean) => ({ listPath: "/cfg/tracked/work.txt", hasTickets: () => hasTickets });
+
+    test("reads the tracked list file", async () => {
+      const { exec, calls } = fake(trackJson);
+      const snapshot = await ghSource({ profile: "work", exec, track: list(true) })("track");
+      expect(snapshot.command).toBe("track");
+      expect(calls[0]!.args).toEqual(["pr-tools", "-p", "work", "track", "--json", "--list", "/cfg/tracked/work.txt"]);
+    });
+
+    test("fails when the list names tickets and gh-pr-tools does not report them", async () => {
+      const withoutTickets = JSON.stringify({ ...JSON.parse(trackJson), tickets: undefined });
+      await expect(ghSource({ profile: "work", exec: fake(withoutTickets).exec, track: list(true) })("track")).rejects.toThrow(
+        "gh-pr-tools track does not take Jira tickets (the tracked list names some)"
+      );
+      const numbersOnly = await ghSource({ profile: "work", exec: fake(withoutTickets).exec, track: list(false) })("track");
+      expect(numbersOnly.command === "track" && numbersOnly.tickets).toBeUndefined();
+    });
+  });
+
   describe("Jira tickets", () => {
     const withoutJira = JSON.stringify({
       ...JSON.parse(mineJson),

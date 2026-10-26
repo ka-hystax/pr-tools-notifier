@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { parseSnapshot, type MineSnapshot, type TodoSnapshot } from "../../contract/snapshot.js";
+import { parseSnapshot, type MineSnapshot, type TodoSnapshot, type TrackSnapshot } from "../../contract/snapshot.js";
 import type { OutMessage } from "../../format/format.js";
 import { StateStore } from "../../state/store.js";
 import { TelegramError } from "../../telegram/api.js";
@@ -21,8 +21,16 @@ afterEach(() => {
 });
 
 function setup() {
-  const stores = { mine: new StateStore(root, "work", "mine"), todo: new StateStore(root, "work", "todo") };
-  const state = { mine: parseSnapshot(fixture("mine")) as MineSnapshot, todo: parseSnapshot(fixture("todo")) as TodoSnapshot };
+  const stores = {
+    mine: new StateStore(root, "work", "mine"),
+    todo: new StateStore(root, "work", "todo"),
+    track: new StateStore(root, "work", "track"),
+  };
+  const state = {
+    mine: parseSnapshot(fixture("mine")) as MineSnapshot,
+    todo: parseSnapshot(fixture("todo")) as TodoSnapshot,
+    track: parseSnapshot(fixture("track")) as TrackSnapshot,
+  };
   const delivered: OutMessage[][] = [];
   const logs: string[] = [];
   const failures: { source: Partial<Record<Command, Error>>; deliver?: Error } = { source: {} };
@@ -44,7 +52,12 @@ function setup() {
     },
     async alert() {},
   };
-  const tick = (commands: Command[] = ["mine", "todo"], timeZone?: string, mergeStatuses?: string[]) =>
+  const tick = (
+    commands: Command[] = ["mine", "todo"],
+    timeZone?: string,
+    mergeStatuses?: string[],
+    hasTracked?: () => boolean
+  ) =>
     runTick({
       commands,
       source,
@@ -53,6 +66,7 @@ function setup() {
       log,
       ...(timeZone ? { timeZone } : {}),
       ...(mergeStatuses ? { mergeStatuses } : {}),
+      ...(hasTracked ? { hasTracked } : {}),
     });
   return { stores, state, delivered, logs, failures, tick };
 }
@@ -260,5 +274,38 @@ describe("runTick with a Jira merge gate", () => {
     for (const pr of h.state.mine.prs) pr.jira = null;
     await h.tick(["mine"], undefined, ["Merge"]);
     expect(h.logs.filter((l) => l.includes("no Jira status"))).toEqual([]);
+  });
+});
+
+describe("runTick with tracked PRs", () => {
+  test("does not poll track while the list is empty", async () => {
+    const h = setup();
+    await h.tick(["mine", "track"], undefined, undefined, () => true);
+    expect(h.stores.track.load().baseline).not.toBeNull();
+    await h.tick(["mine", "track"], undefined, undefined, () => false);
+    expect(h.stores.track.load().baseline).toBeNull(); // forgotten, so a later list starts fresh
+    expect(h.logs.filter((l) => l.includes("track:"))).toHaveLength(1);
+  });
+
+  test("polls track and tells what happened to someone else's PR", async () => {
+    const h = setup();
+    await h.tick(["mine", "track"], undefined, undefined, () => true);
+    h.state.track.prs.find((p) => p.number === 202)!.state = "merged";
+    const result = await h.tick(["mine", "track"], undefined, undefined, () => true);
+    expect(result).toMatchObject({ ok: true, events: 1, messages: 1 });
+    expect(texts(h.delivered)[0]).toMatch(/^🟣 <b>Merged<\/b>\n📌 /);
+  });
+
+  test("leaves the viewer's own tracked PRs to mine, unless mine is not polled", async () => {
+    const h = setup();
+    const own = h.state.track.prs.find((p) => p.number === 202)!;
+    own.author = "dev-me";
+    await h.tick(["mine", "track"], undefined, undefined, () => true);
+    own.state = "merged";
+    expect(await h.tick(["mine", "track"], undefined, undefined, () => true)).toMatchObject({ events: 0 });
+    own.state = "open";
+    await h.tick(["track"], undefined, undefined, () => true);
+    own.state = "merged";
+    expect(await h.tick(["track"], undefined, undefined, () => true)).toMatchObject({ events: 1 });
   });
 });

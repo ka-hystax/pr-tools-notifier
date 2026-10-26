@@ -97,6 +97,18 @@ describe("runLoop", () => {
     ]);
   });
 
+  test("keeps going when only track is too old: following other PRs is extra", async () => {
+    const old: TickResult = {
+      ok: false,
+      errors: ["track: exited with 1: gh pr-tools track: unknown option '--json'"],
+      events: 0,
+      messages: 0,
+    };
+    const h = harness([old, ok]);
+    expect(await runLoop(h.deps)).toBe(true);
+    expect(h.ticks()).toBe(3);
+  });
+
   test("keeps going when the first-tick errors name different setup problems", async () => {
     const mixed: TickResult = {
       ...unknown,

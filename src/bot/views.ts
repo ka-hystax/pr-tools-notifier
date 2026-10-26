@@ -39,11 +39,11 @@ export function ago(iso: string, now: Date): string {
   return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
 
-function plural(count: number, one: string, many = `${one}s`): string {
+export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function earliest(threads: Thread[]): Thread | undefined {
+export function earliest(threads: Thread[]): Thread | undefined {
   return [...threads].sort((a, b) => (a.lastCommentAt < b.lastCommentAt ? -1 : a.lastCommentAt > b.lastCommentAt ? 1 : 0))[0];
 }
 
@@ -194,7 +194,7 @@ function todoBlocks(snapshot: TodoSnapshot, options: ListOptions): Block[] {
   ];
 }
 
-function time(date: Date, timeZone?: string): string {
+export function time(date: Date, timeZone?: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
 }
 
@@ -215,8 +215,8 @@ function lines(blocks: Block[]): Line[] {
 }
 
 // Greedy pages that each fit in one message, whatever the number of PRs.
-function paginate(all: Line[]): Line[][] {
-  const pages: Line[][] = [[]];
+export function paginate<L extends { text: string }>(all: L[]): L[][] {
+  const pages: L[][] = [[]];
   let size = 0;
   for (const line of all) {
     const cost = line.text.length + 2;

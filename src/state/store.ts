@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, renameSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { ensurePrivateDir, writeFileAtomic } from "../utils/fs.js";
@@ -84,6 +84,10 @@ export class StateStore {
     }
   }
 
+  clear(): void {
+    rmSync(this.path, { force: true });
+  }
+
   save(baseline: Baseline): void {
     writeFileAtomic(this.path, JSON.stringify({ version: FILE_VERSION, savedAt: new Date().toISOString(), baseline }));
   }
@@ -108,7 +112,7 @@ export function describeStates(dir: string): StateInfo[] {
   }
   const infos: StateInfo[] = [];
   for (const name of names.sort()) {
-    const match = /^(.+)-(mine|todo)\.json$/.exec(name);
+    const match = /^(.+)-(mine|todo|track)\.json$/.exec(name);
     if (!match) continue;
     const path = join(dir, name);
     const info: StateInfo = { profile: match[1]!, command: match[2] as Snapshot["command"], path, prs: null, savedAt: null };

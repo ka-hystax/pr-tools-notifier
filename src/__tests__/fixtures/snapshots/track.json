@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "command": "track",
+  "generatedAt": "2026-10-13T10:00:00Z",
+  "repo": "acme/web",
+  "viewer": "dev-me",
+  "prs": [
+    {
+      "number": 201,
+      "url": "https://github.com/acme/web/pull/201",
+      "title": "PRJ-2001: add an audit log",
+      "branch": "feature/PRJ-2001-audit",
+      "author": "alice",
+      "isDraft": false,
+      "createdAt": "2026-10-09T09:00:00Z",
+      "updatedAt": "2026-10-13T09:30:00Z",
+      "headOid": "81aae10b745e5f8e3f05bf94782fe4025dd7d775",
+      "reviews": [
+        {
+          "id": "PRR_kwDOAAAA01",
+          "author": "alice",
+          "state": "APPROVED",
+          "submittedAt": "2026-10-12T15:00:00Z",
+          "commitOid": "81aae10b745e5f8e3f05bf94782fe4025dd7d775"
+        },
+        {
+          "id": "PRR_kwDOAAAA02",
+          "author": "bob",
+          "state": "CHANGES_REQUESTED",
+          "submittedAt": "2026-10-13T09:20:00Z",
+          "commitOid": "81aae10b745e5f8e3f05bf94782fe4025dd7d775"
+        }
+      ],
+      "approval": {
+        "threshold": 2,
+        "approvers": ["alice"],
+        "staleApprovers": [],
+        "changesRequestedBy": ["bob"],
+        "decision": "awaiting"
+      },
+      "threads": [
+        {
+          "id": "PRRT_kwDOAAAA01",
+          "state": "pending",
+          "opener": "alice",
+          "lastAuthor": "alice",
+          "watched": false,
+          "commentCount": 1,
+          "path": "src/export/button.tsx",
+          "url": "https://github.com/acme/web/pull/101#discussion_r1001",
+          "lastCommentAt": "2026-10-13T09:10:00Z",
+          "excerpt": "Should this be disabled while the request is in flight?"
+        },
+        {
+          "id": "PRRT_kwDOAAAA02",
+          "state": "answered",
+          "opener": "bob",
+          "lastAuthor": "dev-me",
+          "watched": false,
+          "commentCount": 2,
+          "path": "src/export/api.ts",
+          "url": "https://github.com/acme/web/pull/101#discussion_r1004",
+          "lastCommentAt": "2026-10-12T16:00:00Z",
+          "excerpt": "Fixed, moved the retry into the client."
+        },
+        {
+          "id": "PRRT_kwDOAAAA03",
+          "state": "resolved",
+          "opener": "alice",
+          "lastAuthor": "dev-me",
+          "watched": false,
+          "commentCount": 3,
+          "path": null,
+          "url": "https://github.com/acme/web/pull/101#discussion_r1007",
+          "lastCommentAt": "2026-10-11T12:00:00Z",
+          "excerpt": "Done."
+        },
+        {
+          "id": "PRRT_kwDOAAAA04",
+          "state": "pending",
+          "opener": "coderabbitai",
+          "lastAuthor": "coderabbitai",
+          "watched": true,
+          "commentCount": 1,
+          "path": "src/export/button.tsx",
+          "url": "https://github.com/acme/web/pull/101#discussion_r1008",
+          "lastCommentAt": "2026-10-09T09:05:00Z",
+          "excerpt": "Consider memoizing this callback."
+        }
+      ],
+      "threadsTruncated": false,
+      "ci": {
+        "state": "fail",
+        "failedJobs": ["build-ui", "e2e (chromium)"]
+      },
+      "mergeState": "dirty",
+      "pendingReviewers": ["backend"],
+      "jira": {
+        "key": "PRJ-2001",
+        "url": "https://acme.atlassian.net/browse/PRJ-2001",
+        "status": "In Review"
+      },
+      "state": "open",
+      "closedAt": null
+    },
+    {
+      "number": 202,
+      "url": "https://github.com/acme/web/pull/202",
+      "title": "PRJ-2001: audit log page",
+      "branch": "feature/PRJ-2001-ui",
+      "author": "bob",
+      "isDraft": false,
+      "createdAt": "2026-10-10T08:00:00Z",
+      "updatedAt": "2026-10-10T08:00:00Z",
+      "headOid": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+      "reviews": [],
+      "approval": {
+        "threshold": 2,
+        "approvers": [],
+        "staleApprovers": [],
+        "changesRequestedBy": [],
+        "decision": "awaiting"
+      },
+      "threads": null,
+      "threadsTruncated": false,
+      "ci": {
+        "state": "pass",
+        "failedJobs": []
+      },
+      "mergeState": "clean",
+      "pendingReviewers": [],
+      "jira": {
+        "key": "PRJ-2001",
+        "url": "https://acme.atlassian.net/browse/PRJ-2001",
+        "status": "In Review"
+      },
+      "state": "open",
+      "closedAt": null
+    },
+    {
+      "number": 203,
+      "url": "https://github.com/acme/web/pull/203",
+      "title": "PRJ-1990: rename the settings tab",
+      "branch": "bug/PRJ-1990",
+      "author": "carol",
+      "isDraft": true,
+      "createdAt": "2026-10-11T08:00:00Z",
+      "updatedAt": "2026-10-13T07:00:00Z",
+      "headOid": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "reviews": [
+        {
+          "id": "PRR_kwDOAAAA03",
+          "author": "alice",
+          "state": "APPROVED",
+          "submittedAt": "2026-10-12T10:00:00Z",
+          "commitOid": "0123456789abcdef0123456789abcdef01234567"
+        }
+      ],
+      "approval": {
+        "threshold": 2,
+        "approvers": [],
+        "staleApprovers": ["alice"],
+        "changesRequestedBy": [],
+        "decision": "awaiting"
+      },
+      "threads": [],
+      "threadsTruncated": true,
+      "ci": {
+        "state": "pending",
+        "failedJobs": []
+      },
+      "mergeState": "unknown",
+      "pendingReviewers": [],
+      "jira": {
+        "key": "PRJ-1990",
+        "url": "https://acme.atlassian.net/browse/PRJ-1990",
+        "status": "Done"
+      },
+      "state": "merged",
+      "closedAt": "2026-10-12T09:00:00Z"
+    }
+  ],
+  "tickets": [
+    {
+      "key": "PRJ-2001",
+      "url": "https://acme.atlassian.net/browse/PRJ-2001",
+      "status": "In Review",
+      "prs": [201, 202]
+    },
+    {
+      "key": "PRJ-2050",
+      "url": "https://acme.atlassian.net/browse/PRJ-2050",
+      "status": "To Do",
+      "prs": []
+    }
+  ]
+}

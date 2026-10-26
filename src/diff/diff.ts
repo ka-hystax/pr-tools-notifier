@@ -7,6 +7,8 @@ import type {
   Thread,
   ThreadState,
   TodoPullRequest,
+  TrackPullRequest,
+  TrackTicket,
 } from "../contract/snapshot.js";
 
 export interface Baseline {
@@ -38,6 +40,7 @@ export interface PrRef {
   url: string;
   title: string;
   author: string;
+  tracked?: true; // someone else's PR the viewer follows (`track`), not one of theirs
 }
 
 export type NotifyEvent =
@@ -50,12 +53,21 @@ export type NotifyEvent =
   | { kind: "ready_to_merge"; pr: PrRef; approval: Approval; ticket?: JiraTicket } // ticket: already in the merge status
   | { kind: "merge_blocked"; pr: PrRef; waitingFor: string[] }
   | { kind: "review_passed"; pr: PrRef; approval: Approval; status: WaitingJira }
-  | { kind: "ticket_in_merge"; pr: PrRef; approval: Approval; ticket: JiraTicket; status: MergeStatus };
+  | { kind: "ticket_in_merge"; pr: PrRef; approval: Approval; ticket: JiraTicket; status: MergeStatus }
+  // Tracked PRs, besides review_approved (status "unapproved"), review_changes_requested, ci_failed and thread_pending:
+  | { kind: "tracked_new_pr"; pr: PrRef; ticket: JiraTicket }
+  | { kind: "tracked_passed"; pr: PrRef; approval: Approval; by: string[] } // by: the approvals that made it pass
+  | { kind: "tracked_merged"; pr: PrRef }
+  | { kind: "tracked_closed"; pr: PrRef }
+  | { kind: "tracked_ci_passed"; pr: PrRef }
+  | { kind: "tracked_conflicts"; pr: PrRef }
+  | { kind: "tracked_ticket_moved"; pr: PrRef; ticket: JiraTicket; from: string };
 
 export const MAX_MISSING_TICKS = 3;
 
-type PullRequest = MinePullRequest | TodoPullRequest;
-type Ctx = { repo: string; viewer: string };
+type PullRequest = MinePullRequest | TodoPullRequest | TrackPullRequest;
+// skipOwn: the viewer's own PRs are left to mine, which says more about them.
+type Ctx = { repo: string; viewer: string; skipOwn?: boolean };
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -118,7 +130,7 @@ export function holdFor(
 }
 
 // A failed lookup leaves the status null: keep the last real one for the same ticket, as with GitHub's "unknown".
-function carryTicket(old: MinePullRequest[], curr: MinePullRequest[]): MinePullRequest[] {
+function carryTicket<P extends MinePullRequest>(old: P[], curr: P[]): P[] {
   const before = new Map(old.map((p) => [p.number, p.jira]));
   return curr.map((now) => {
     const prev = before.get(now.number);
@@ -129,7 +141,7 @@ function carryTicket(old: MinePullRequest[], curr: MinePullRequest[]): MinePullR
 
 // GitHub answers "unknown" while it recomputes mergeability. For the same commit the last real answer is kept
 // instead of guessing, so a conflict is not mistaken for a clean branch and a clean one is not announced twice.
-function carryMergeState(old: MinePullRequest[], curr: MinePullRequest[]): MinePullRequest[] {
+function carryMergeState<P extends MinePullRequest>(old: P[], curr: P[]): P[] {
   const before = new Map(old.map((p) => [p.number, p]));
   return curr.map((now) => {
     const prev = before.get(now.number);
@@ -199,6 +211,80 @@ function todoEvents(ctx: Ctx, before: TodoPullRequest | undefined, now: TodoPull
   return events;
 }
 
+// Review passed for someone following the PR: enough approvals and nobody asking for changes. CI and conflicts
+// are left out: they do not stop QA from testing.
+export function trackedPassed(pr: TrackPullRequest): boolean {
+  return (
+    pr.state === "open" && !pr.isDraft && pr.approval.decision !== "awaiting" && pr.approval.changesRequestedBy.length === 0
+  );
+}
+
+function trackEvents(ctx: Ctx, before: TrackPullRequest | undefined, now: TrackPullRequest): NotifyEvent[] {
+  if (!before || (ctx.skipOwn && now.author === ctx.viewer)) return [];
+  const pr: PrRef = { ...prRef(ctx, now), tracked: true };
+  if (before.state === "open" && now.state !== "open")
+    return [{ kind: now.state === "merged" ? "tracked_merged" : "tracked_closed", pr }];
+  if (now.state !== "open") return [];
+
+  const events: NotifyEvent[] = [];
+  for (const thread of enteringState(before.threads, now.threads, "pending")) {
+    if (thread.lastAuthor !== ctx.viewer) events.push({ kind: "thread_pending", pr, thread });
+  }
+  const failedBefore = before.ci.state === "fail" && before.headOid === now.headOid;
+  if (now.ci.state === "fail" && !failedBefore) events.push({ kind: "ci_failed", pr, failedJobs: now.ci.failedJobs });
+  if (now.ci.state === "pass" && before.ci.state === "fail") events.push({ kind: "tracked_ci_passed", pr });
+  if (now.mergeState === "dirty" && before.mergeState !== "dirty") events.push({ kind: "tracked_conflicts", pr });
+
+  const known = new Set(before.reviews.map((r) => r.id));
+  const fresh = now.reviews.filter((r) => !known.has(r.id) && r.author !== ctx.viewer);
+  for (const review of fresh.filter((r) => r.state === "CHANGES_REQUESTED")) {
+    events.push({ kind: "review_changes_requested", pr, review, approval: now.approval });
+  }
+  const approvals = fresh.filter((r) => r.state === "APPROVED");
+  if (trackedPassed(now) && !trackedPassed(before)) {
+    events.push({ kind: "tracked_passed", pr, approval: now.approval, by: approvals.map((r) => r.author) });
+  } else {
+    for (const review of approvals) {
+      events.push({ kind: "review_approved", pr, review, approval: now.approval, status: { kind: "unapproved" } });
+    }
+  }
+  return events;
+}
+
+// A failed Jira lookup leaves a ticket's status null: keep the last real one, as for a PR's ticket.
+function carryTicketStatus(old: TrackTicket[] | undefined, curr: TrackTicket[] | undefined): TrackTicket[] | undefined {
+  const before = new Map((old ?? []).map((t) => [t.key, t]));
+  return curr?.map((t) => (t.status === null && before.get(t.key)?.status ? { ...t, status: before.get(t.key)!.status } : t));
+}
+
+// What happened to the tickets themselves: a PR that was not there before, a status that moved.
+// A ticket seen for the first time only seeds; a move is told on the ticket's first open PR, or its last one.
+type Tracked = { prs: TrackPullRequest[]; tickets?: TrackTicket[] | undefined };
+
+function ticketEvents(ctx: Ctx, old: Tracked, curr: Tracked): NotifyEvent[] {
+  const known = new Set(old.prs.map((p) => p.number));
+  const byNumber = new Map(curr.prs.map((p) => [p.number, p]));
+  const before = new Map((old.tickets ?? []).map((t) => [t.key, t]));
+  const ref = (p: TrackPullRequest): PrRef => ({ ...prRef(ctx, p), tracked: true });
+  const events: NotifyEvent[] = [];
+  for (const ticket of curr.tickets ?? []) {
+    const prev = before.get(ticket.key);
+    if (!prev) continue;
+    const jira: JiraTicket = { key: ticket.key, url: ticket.url, status: ticket.status };
+    const prs = ticket.prs.flatMap((n) => byNumber.get(n) ?? []).filter((p) => !(ctx.skipOwn && p.author === ctx.viewer));
+    for (const p of prs) {
+      if (!prev.prs.includes(p.number) && !known.has(p.number) && p.state === "open") {
+        events.push({ kind: "tracked_new_pr", pr: ref(p), ticket: jira });
+      }
+    }
+    const home = prs.find((p) => p.state === "open") ?? prs.at(-1);
+    if (home && prev.status !== null && ticket.status !== null && prev.status !== ticket.status) {
+      events.push({ kind: "tracked_ticket_moved", pr: ref(home), ticket: jira, from: prev.status });
+    }
+  }
+  return events;
+}
+
 // Nothing when the PR is new or either lookup failed: that tick only seeds.
 
 function diffPrs<P extends PullRequest>(
@@ -225,9 +311,10 @@ function diffPrs<P extends PullRequest>(
 export function computeEvents(
   prev: Baseline | null,
   curr: Snapshot,
-  gate?: MergeGate
+  gate?: MergeGate,
+  { skipOwn = false }: { skipOwn?: boolean } = {}
 ): { events: NotifyEvent[]; next: Baseline } {
-  const ctx = { repo: curr.repo, viewer: curr.viewer };
+  const ctx: Ctx = { repo: curr.repo, viewer: curr.viewer, skipOwn };
   if (prev !== null && prev.snapshot.repo === curr.repo) {
     const old = prev.snapshot;
     if (old.command === "mine" && curr.command === "mine") {
@@ -244,6 +331,16 @@ export function computeEvents(
         todoEvents(ctx, before, now)
       );
       return { events: events.sort(compareEvents), next: { snapshot: { ...curr, prs }, missingTicks } };
+    }
+    if (old.command === "track" && curr.command === "track") {
+      const carried = { ...curr, prs: carryTicket(old.prs, carryMergeState(old.prs, curr.prs)) };
+      const tickets = carryTicketStatus(old.tickets, curr.tickets);
+      const { events, prs, missingTicks } = diffPrs(old.prs, carried.prs, prev.missingTicks, (before, now) =>
+        trackEvents(ctx, before, now)
+      );
+      events.push(...ticketEvents(ctx, old, { prs: carried.prs, tickets }));
+      const snapshot = { ...curr, prs, ...(tickets ? { tickets } : {}) };
+      return { events: events.sort(compareEvents), next: { snapshot, missingTicks } };
     }
   }
   return { events: [], next: { snapshot: curr, missingTicks: {} } };

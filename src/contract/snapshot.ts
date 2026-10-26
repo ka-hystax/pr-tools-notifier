@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// `gh pr-tools [-p NAME] mine|todo --json`: exit 0 + one Snapshot on stdout; non-zero = failed tick.
+// `gh pr-tools [-p NAME] mine|todo|track --json`: exit 0 + one Snapshot on stdout; non-zero = failed tick.
 export const SCHEMA_VERSION = 1;
 
 const login = z.string().min(1); // deleted accounts are "ghost"
@@ -93,6 +93,23 @@ export const TodoPullRequestSchema = z.object({
 });
 export type TodoPullRequest = z.infer<typeof TodoPullRequestSchema>;
 
+// Someone else's PR, followed by number or through its ticket: everything mine reports, in any state.
+export const TrackPullRequestSchema = z.object({
+  ...MinePullRequestSchema.shape,
+  state: z.enum(["open", "merged", "closed"]), // a draft is open with isDraft
+  closedAt: iso.nullable(), // when it merged or closed
+});
+export type TrackPullRequest = z.infer<typeof TrackPullRequestSchema>;
+
+// A ticket track was given, with the PRs whose title names it (oldest first; none yet is fine).
+export const TrackTicketSchema = z.object({
+  key: z.string().min(1),
+  url: z.string().nullable(),
+  status: z.string().nullable(),
+  prs: z.array(z.number().int().positive()),
+});
+export type TrackTicket = z.infer<typeof TrackTicketSchema>;
+
 const header = {
   schemaVersion: z.literal(SCHEMA_VERSION),
   generatedAt: iso,
@@ -106,7 +123,15 @@ export type MineSnapshot = z.infer<typeof MineSnapshotSchema>;
 export const TodoSnapshotSchema = z.object({ ...header, command: z.literal("todo"), prs: z.array(TodoPullRequestSchema) });
 export type TodoSnapshot = z.infer<typeof TodoSnapshotSchema>;
 
-export const SnapshotSchema = z.discriminatedUnion("command", [MineSnapshotSchema, TodoSnapshotSchema]);
+export const TrackSnapshotSchema = z.object({
+  ...header,
+  command: z.literal("track"),
+  prs: z.array(TrackPullRequestSchema),
+  tickets: z.array(TrackTicketSchema).optional(), // absent: a gh-pr-tools that takes PR numbers only
+});
+export type TrackSnapshot = z.infer<typeof TrackSnapshotSchema>;
+
+export const SnapshotSchema = z.discriminatedUnion("command", [MineSnapshotSchema, TodoSnapshotSchema, TrackSnapshotSchema]);
 export type Snapshot = z.infer<typeof SnapshotSchema>;
 
 export class ContractError extends Error {}

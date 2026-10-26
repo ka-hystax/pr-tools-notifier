@@ -49,6 +49,7 @@ type MergeBlocked = Extract<NotifyEvent, { kind: "merge_blocked" }>;
 type ReviewPassed = Extract<NotifyEvent, { kind: "review_passed" }>;
 type TicketInMerge = Extract<NotifyEvent, { kind: "ticket_in_merge" }>;
 type ReviewRequested = Extract<NotifyEvent, { kind: "review_requested" }>;
+type TrackedPassed = Extract<NotifyEvent, { kind: "tracked_passed" }>;
 
 // Most urgent first within a PR.
 const RANK: Record<NotifyEvent["kind"], number> = {
@@ -62,7 +63,17 @@ const RANK: Record<NotifyEvent["kind"], number> = {
   review_passed: 6,
   review_approved: 6,
   merge_blocked: 7,
+  tracked_new_pr: 0,
+  tracked_merged: 0,
+  tracked_closed: 0,
+  tracked_conflicts: 1,
+  tracked_passed: 5,
+  tracked_ci_passed: 6,
+  tracked_ticket_moved: 7,
 };
+
+// A tracked PR makes a sound only for what QA waits for; the rest is there to read.
+const LOUD_TRACKED = new Set<NotifyEvent["kind"]>(["tracked_new_pr", "tracked_passed", "tracked_merged", "tracked_closed"]);
 
 export function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -98,8 +109,10 @@ export function names(authors: string[]): string {
   return unique.slice(0, MAX_NAMES).map(bold).join(", ") + (unique.length > MAX_NAMES ? ` +${unique.length - MAX_NAMES}` : "");
 }
 
+// A tracked PR is someone else's: marked, and with its author.
 function header(pr: PrRef): string {
-  return `${link(pr.url, bold(`#${pr.number}`))} ${escapeHtml(clip(pr.title, TITLE_MAX))}`;
+  const head = `${link(pr.url, bold(`#${pr.number}`))} ${escapeHtml(clip(pr.title, TITLE_MAX))}`;
+  return pr.tracked ? `📌 ${head} · ${escapeHtml(pr.author)}` : head;
 }
 
 function quote(excerpt: string): string {
@@ -114,15 +127,19 @@ const isThreadEvent = (e: NotifyEvent): e is ThreadEvent => "thread" in e;
 const isApproved = (e: NotifyEvent): e is Approved => e.kind === "review_approved";
 const isChangesRequested = (e: NotifyEvent): e is ChangesRequested => e.kind === "review_changes_requested";
 
-// Bot threads and approvals below the threshold are worth seeing, not hearing.
+// Bot threads, approvals below the threshold and most of what happens to tracked PRs are worth seeing, not hearing.
 const isLowPriority = (e: NotifyEvent): boolean =>
-  (e.kind === "thread_pending" && e.thread.watched) || (e.kind === "review_approved" && e.approval.decision === "awaiting");
+  (e.kind === "thread_pending" && e.thread.watched) ||
+  (e.kind === "review_approved" && e.approval.decision === "awaiting") ||
+  (e.pr.tracked === true && !LOUD_TRACKED.has(e.kind));
 
 // One author's threads of one kind on one PR; several collapse into a single linked count.
+// On a tracked PR a thread is one short line: the people following it do not answer it.
 function threadLine(events: ThreadEvent[]): string {
   const first = events[0]!;
   const author = bold(first.thread.lastAuthor);
   const bot = events.every((e) => e.thread.watched);
+  const icon = bot ? "🤖" : "💬";
 
   if (events.length === 1) {
     const { thread } = first;
@@ -130,7 +147,8 @@ function threadLine(events: ThreadEvent[]): string {
       return `↩️ ${author} ${link(thread.url, "replied")} in your thread${comments(thread)}${quote(thread.excerpt)}`;
     }
     const action = thread.commentCount > 1 ? "replied in a thread" : "opened a thread";
-    return `${bot ? "🤖" : "💬"} ${author} ${link(thread.url, action)}${comments(thread)}${bot ? "" : quote(thread.excerpt)}`;
+    const excerpt = bot || first.pr.tracked ? "" : quote(thread.excerpt);
+    return `${icon} ${author} ${link(thread.url, action)}${comments(thread)}${excerpt}`;
   }
 
   if (first.kind === "thread_answered") {
@@ -141,7 +159,7 @@ function threadLine(events: ThreadEvent[]): string {
     : events.every((e) => e.thread.commentCount > 1)
       ? "replied in"
       : "commented in";
-  return `${bot ? "🤖" : "💬"} ${author} ${verb} ${link(first.thread.url, `${events.length} threads`)}`;
+  return `${icon} ${author} ${verb} ${link(first.thread.url, `${events.length} threads`)}`;
 }
 
 function ciLine(event: CiFailed): Line {
@@ -244,6 +262,11 @@ function reviewPassedLine(event: ReviewPassed): Line {
   return { text: `${verdict(event.status, event.pr.url)}${stale}`, url: event.pr.url, events: [event] };
 }
 
+function trackedPassedLine(event: TrackedPassed): Line {
+  const by = event.by.length > 0 ? ` · ${names(event.by)} approved` : "";
+  return { text: `✅ <b>Review passed</b>${by} · ${approvalCount(event.approval)}`, url: event.pr.url, events: [event] };
+}
+
 function blockedLine(event: MergeBlocked): Line {
   return {
     text: `🚧 All set, but GitHub blocks the merge: ${waitingFor(event.waitingFor)}`,
@@ -280,6 +303,28 @@ function standalone(event: NotifyEvent): Line[] {
       return [reviewPassedLine(event)];
     case "ticket_in_merge":
       return [ticketInMergeLine(event)];
+    case "tracked_passed":
+      return [trackedPassedLine(event)];
+    case "tracked_new_pr":
+      return [{ text: `🆕 New PR for ${ticketLink(event.ticket)}`, url: event.pr.url, events: [event] }];
+    case "tracked_merged":
+      return [{ text: "🟣 <b>Merged</b>", url: event.pr.url, events: [event] }];
+    case "tracked_closed":
+      return [{ text: "✖️ Closed without merging", url: event.pr.url, events: [event] }];
+    case "tracked_ci_passed":
+      return [{ text: `✔️ ${link(`${event.pr.url}/checks`, "CI passed")}`, url: `${event.pr.url}/checks`, events: [event] }];
+    case "tracked_conflicts":
+      return [{ text: "🔀 Conflicts with the base branch", url: event.pr.url, events: [event] }];
+    case "tracked_ticket_moved": {
+      const to = italic(event.ticket.status ?? "");
+      return [
+        {
+          text: `🎫 ${ticketLink(event.ticket)}: ${italic(event.from)} → ${to}`,
+          url: event.ticket.url ?? event.pr.url,
+          events: [event],
+        },
+      ];
+    }
     default:
       return [];
   }

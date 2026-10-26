@@ -13,6 +13,8 @@ export interface TickDeps {
   log: Logger;
   timeZone?: string;
   mergeStatuses?: string[];
+  // Whether the tracked list names anything; track is not polled while it is empty.
+  hasTracked?: () => boolean;
 }
 
 // Tickets exist but Jira told gh-pr-tools nothing about any of them: no token, or every lookup failed.
@@ -23,7 +25,16 @@ function noTicketStatus(snapshot: Snapshot): boolean {
 }
 
 // Baselines move only after the messages were delivered, so a failed tick repeats the same events.
-export async function runTick({ commands, source, stores, sink, log, timeZone, mergeStatuses }: TickDeps): Promise<TickResult> {
+export async function runTick({
+  commands,
+  source,
+  stores,
+  sink,
+  log,
+  timeZone,
+  mergeStatuses,
+  hasTracked,
+}: TickDeps): Promise<TickResult> {
   const gate: MergeGate | undefined = mergeStatuses ? { statuses: mergeStatuses } : undefined;
   const errors: string[] = [];
   const events: NotifyEvent[] = [];
@@ -33,6 +44,11 @@ export async function runTick({ commands, source, stores, sink, log, timeZone, m
 
   for (const command of commands) {
     try {
+      // An emptied list forgets its baseline, so entries added later start fresh instead of replaying old changes.
+      if (command === "track" && !hasTracked?.()) {
+        stores.track.clear();
+        continue;
+      }
       const curr = await source(command);
       const store = stores[command];
       const { baseline, reset } = store.load();
@@ -42,7 +58,10 @@ export async function runTick({ commands, source, stores, sink, log, timeZone, m
           `${command}: no Jira status came back, so "Time to merge" keeps waiting (check the Jira token: \`gh pr-tools profile show\`)`
         );
       }
-      const result = computeEvents(baseline, curr, command === "mine" ? gate : undefined);
+      // A tracked PR of the viewer's own is left to mine, which says more about it.
+      const result = computeEvents(baseline, curr, command === "mine" ? gate : undefined, {
+        skipOwn: command === "track" && commands.includes("mine"),
+      });
       log.info(
         baseline === null
           ? `${command}: first run, saved ${curr.prs.length} PRs as the baseline`

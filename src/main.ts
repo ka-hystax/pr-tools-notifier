@@ -8,10 +8,13 @@ import { runReset } from "./commands/reset.js";
 import { runCommand } from "./commands/run.js";
 import { runSendTest } from "./commands/sendTest.js";
 import { runStatus } from "./commands/status.js";
+import { runTrack } from "./commands/track.js";
 import { checkBot, NOT_CONFIGURED, telegramSink } from "./commands/sinks.js";
 import { ConfigStore } from "./config/config.js";
 import { configDir, stateDir } from "./config/paths.js";
 import { SettingsError, SettingsStore } from "./config/settings.js";
+import { TrackedList } from "./config/tracked.js";
+import { ProfileError, resolveProfile } from "./sources/profiles.js";
 import { activeLocks } from "./state/lock.js";
 import { TelegramApi } from "./telegram/api.js";
 
@@ -70,6 +73,21 @@ export async function main(argv: string[]): Promise<number> {
 
   if (parsed.kind === "config") {
     return runConfig(new SettingsStore(configDir()), parsed.action, (line) => console.log(line)) ? 0 : 1;
+  }
+
+  if (parsed.kind === "track") {
+    let profile: string;
+    try {
+      profile = await resolveProfile({
+        ...(parsed.profile ? { profile: parsed.profile } : {}),
+        ...(parsed.prToolsPath ? { prToolsPath: parsed.prToolsPath } : {}),
+      });
+    } catch (err) {
+      if (!(err instanceof ProfileError)) throw err;
+      console.error(`pr-tools-notifier: ${err.message}`);
+      return 1;
+    }
+    return runTrack(new TrackedList(configDir(), profile), parsed.action, (line) => console.log(line)) ? 0 : 1;
   }
 
   if (parsed.kind === "status") {

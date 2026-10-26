@@ -1,6 +1,7 @@
 import { DEFAULT_INTERVAL_MS, formatInterval, readInterval } from "../config/interval.js";
 import type { Settings, SettingsStore } from "../config/settings.js";
-import type { Snapshot } from "../contract/snapshot.js";
+import type { Snapshot, TrackSnapshot } from "../contract/snapshot.js";
+import { entryLabel, parseRef, type TrackedEntry, type TrackedList } from "../config/tracked.js";
 import { computeEvents, type MergeGate } from "../diff/diff.js";
 import { bold, clip, escapeHtml } from "../format/format.js";
 import { sleep } from "../runner/loop.js";
@@ -10,7 +11,8 @@ import { TelegramError, type ApiButton, type BotCommand, type Update } from "../
 import { LiveView } from "./live.js";
 import type { BotStateStore } from "./state.js";
 import type { BotApi } from "./types.js";
-import { ago, renderList } from "./views.js";
+import { isDone, renderTracked } from "./tracked.js";
+import { ago, plural, renderList } from "./views.js";
 import { CLOSE, intervalScreen, savedNote, settingsScreen, statusPrompt, type SettingsView } from "./settings.js";
 
 import { KEYBOARD } from "./keyboard.js";
@@ -20,6 +22,9 @@ export { KEYBOARD };
 export const BOT_COMMANDS: BotCommand[] = [
   { command: "todo", description: "PRs waiting for your review" },
   { command: "mine", description: "your open PRs" },
+  { command: "tracked", description: "PRs and Jira tickets you follow" },
+  { command: "track", description: "follow PRs or Jira tickets: /track PRJ-1824 1281" },
+  { command: "untrack", description: "stop following some" },
   { command: "status", description: "what is being watched" },
   { command: "settings", description: "poll interval and Jira merge status" },
   { command: "help", description: "what the bot can do" },
@@ -28,11 +33,22 @@ export const BOT_COMMANDS: BotCommand[] = [
 const LABELS: Record<string, Action> = {
   "📥 Todo": "todo",
   "📤 Mine": "mine",
+  "📌 Tracked": "tracked",
   "ℹ️ Status": "status",
   "⚙️ Settings": "settings",
 };
 
-export type Action = "todo" | "mine" | "status" | "settings" | "help" | "unknown";
+export type Action = "todo" | "mine" | "tracked" | "track" | "untrack" | "status" | "settings" | "help" | "unknown";
+
+// References in a message, separated by spaces, commas or lines: "PRJ-1824, 1281" names PRJ-1824 and 1281.
+export function splitRefs(text: string): string[] {
+  return text.split(/[\s,]+/).filter((part) => part !== "");
+}
+
+// What follows a command: "/track PRJ-1824 1281" names PRJ-1824 and 1281.
+export function commandArgs(text: string): string[] {
+  return splitRefs(text.trim().replace(/^\/\S+/, ""));
+}
 
 // A slash command (with or without @botname) or the text of a keyboard button.
 export function parseAction(text: string): Action {
@@ -43,6 +59,9 @@ export function parseAction(text: string): Action {
   switch (match?.[1]?.toLowerCase()) {
     case "todo":
     case "mine":
+    case "tracked":
+    case "track":
+    case "untrack":
     case "status":
     case "settings":
       return match[1]!.toLowerCase() as Action;
@@ -59,6 +78,7 @@ I message you when something changes in your PRs. You can also ask me:
 
 📥 /todo — PRs waiting for your review
 📤 /mine — your open PRs
+📌 /tracked — PRs and Jira tickets you follow; /track PRJ-1824 adds, /untrack removes
 ℹ️ /status — what I am watching
 ⚙️ /settings — poll interval and Jira merge status
 
@@ -66,6 +86,13 @@ An answer stays on screen until you ask for something else.
 <i>This message holds the buttons below; /help brings them back if they go.</i>`;
 
 const ERROR_MAX = 300;
+const MAX_REMOVE_BUTTONS = 60;
+const BACK_TO_TRACKED: ApiButton = { text: "‹ Back", data: "tv" };
+const ADD_TRACKED: ApiButton = { text: "➕ Add", data: "ta" };
+const EMPTY_TRACKED = (now: Date, note?: string): string => renderTracked([], null, { now, ...(note ? { note } : {}) })[0]!;
+const TRACK_PROMPT = `➕ Send what to follow, several at once if you like: a PR number (<code>1281</code>), a PR link, a Jira ticket (<code>PRJ-1824</code>) or a Jira link.
+
+A ticket stands for every PR whose title names it, including PRs opened later.`;
 // A question the bot asked ("send the Jira status") is forgotten after this long.
 const ANSWER_WITHIN_MS = 10 * 60_000;
 
@@ -82,6 +109,8 @@ export interface BotDeps {
   signal: AbortSignal;
   // The current settings, re-read on every call.
   settings: () => Settings;
+  // The PRs and tickets /tracked shows and /track and /untrack edit; without it there is no tracking.
+  tracked?: TrackedList;
   // Where /settings writes; without it the settings can only be looked at.
   settingsStore?: SettingsStore;
   // `run --interval`, which wins over POLL_INTERVAL for this run.
@@ -113,8 +142,8 @@ export class Bot {
   private readonly freshMs: number;
   private readonly strangers = new Set<number>();
   private shown: Shown | null = null;
-  // Set while the bot waits for the Jira status as a plain message, on the settings message it asked in.
-  private asked: { messageId: number; at: number } | null = null;
+  // Set while the bot waits for a plain message, on the message it asked in: a Jira status, or what to track.
+  private asked: { messageId: number; at: number; for: "merge_status" | "track" } | null = null;
 
   constructor(private readonly deps: BotDeps) {
     this.live = new LiveView(deps.api, deps.chatId, deps.state, deps.log);
@@ -134,7 +163,7 @@ export class Bot {
       if (signal.aborted) return;
       log.warn(`bot setup: ${errorMessage(err)}`);
     }
-    log.info("listening for commands: /todo, /mine, /status, /settings");
+    log.info("listening for commands: /todo, /mine, /tracked, /status, /settings");
 
     let offset: number | undefined;
     let failures = 0;
@@ -194,11 +223,15 @@ export class Bot {
     if (action === "unknown" && asked && !message.text.trim().startsWith("/")) {
       if (asked.messageId === this.live.current && this.now().getTime() - asked.at < ANSWER_WITHIN_MS) {
         await this.live.remove(replaces);
-        await this.saveSetting(asked.messageId, "MERGE_STATUS", message.text);
+        if (asked.for === "track") await this.addTracked(asked.messageId, splitRefs(message.text));
+        else await this.saveSetting(asked.messageId, "MERGE_STATUS", message.text);
         return;
       }
     }
     if (action === "todo" || action === "mine") return this.openList(action, replaces);
+    if (action === "tracked" || action === "track" || action === "untrack") {
+      return this.onTrackCommand(action, commandArgs(message.text), replaces);
+    }
     this.shown = null;
     if (action === "status") {
       await this.live.show(this.statusText(), [[{ text: "⚙️ Settings", data: "s" }, CLOSE]], { replaces });
@@ -293,7 +326,7 @@ export class Bot {
       await answer();
       const { text, buttons } = statusPrompt(this.settingsView());
       await this.live.update(messageId, text, buttons);
-      this.asked = { messageId, at: this.now().getTime() };
+      this.asked = { messageId, at: this.now().getTime(), for: "merge_status" };
       return;
     }
     if (data === "sj:-") {
@@ -333,7 +366,11 @@ export class Bot {
       await this.onSettingsTap(data, query.message.message_id, answer);
       return;
     }
-    const match = /^([pr]):(mine|todo)(?::(\d+))?$/.exec(data);
+    if (data === "tv" || data === "ta" || data.startsWith("tr") || data === "tc") {
+      await this.onTrackTap(data, query.message.message_id, answer);
+      return;
+    }
+    const match = /^([pr]):(mine|todo|track)(?::(\d+))?$/.exec(data);
     if (!match || !this.deps.commands.includes(match[2] as Command)) {
       await answer();
       return;
@@ -427,19 +464,183 @@ export class Bot {
   private page(shown: Shown): { text: string; buttons: ApiButton[][] } {
     const { kind, snapshot } = shown;
     const gate = this.gate(kind);
-    const pages = renderList(snapshot as Parameters<typeof renderList>[0], {
+    const options = {
       now: this.now(),
-      ...(gate ? { gate } : {}),
       ...(this.deps.timeZone ? { timeZone: this.deps.timeZone } : {}),
       ...(shown.note ? { note: shown.note } : {}),
-    });
+    };
+    const pages =
+      kind === "track"
+        ? renderTracked(this.trackedEntries(), snapshot as TrackSnapshot, options)
+        : renderList(snapshot as Parameters<typeof renderList>[0], { ...options, ...(gate ? { gate } : {}) });
     const page = Math.min(Math.max(shown.page, 0), pages.length - 1);
     shown.page = page;
     const nav: ApiButton[] = [];
     if (page > 0) nav.push({ text: "◀ Prev", data: `p:${kind}:${page - 1}` });
     if (page < pages.length - 1) nav.push({ text: "Next ▶", data: `p:${kind}:${page + 1}` });
     const actions: ApiButton[] = [{ text: "🔄 Refresh", data: `r:${kind}` }, CLOSE];
-    return { text: pages[page]!, buttons: nav.length > 0 ? [nav, actions] : [actions] };
+    const edit = kind === "track" ? [this.trackButtons(snapshot as TrackSnapshot)] : [];
+    return { text: pages[page]!, buttons: [...(nav.length > 0 ? [nav] : []), ...edit, actions] };
+  }
+
+  private trackedEntries(): TrackedEntry[] {
+    return this.deps.tracked?.read().entries ?? [];
+  }
+
+  private trackButtons(snapshot: TrackSnapshot | null): ApiButton[] {
+    const entries = this.trackedEntries();
+    const buttons: ApiButton[] = [ADD_TRACKED];
+    if (entries.length > 0) buttons.push({ text: "➖ Remove", data: "tr" });
+    if (snapshot && entries.some((e) => isDone(e, snapshot))) buttons.push({ text: "🧹 Clear done", data: "tc" });
+    return buttons;
+  }
+
+  // /tracked shows the list; /track and /untrack change it first (with nothing after them, they ask).
+  private async onTrackCommand(action: "tracked" | "track" | "untrack", refs: string[], replaces: number): Promise<void> {
+    this.shown = null;
+    if (!this.deps.tracked || !this.deps.commands.includes("track")) {
+      await this.live.show("ℹ️ This run does not follow other PRs (see --commands).", [[CLOSE]], { replaces });
+      return;
+    }
+    if (action === "track" && refs.length === 0) {
+      const messageId = await this.live.show(TRACK_PROMPT, [[BACK_TO_TRACKED, CLOSE]], { replaces });
+      this.asked = { messageId, at: this.now().getTime(), for: "track" };
+      return;
+    }
+    if (action === "untrack" && refs.length === 0) {
+      const { text, buttons } = this.removeScreen();
+      await this.live.show(text, buttons, { replaces });
+      return;
+    }
+    // Without anything to fetch the list is shown at once, not after a placeholder.
+    const saved = this.stored("track");
+    if (action === "tracked" && (saved || this.trackedEntries().length === 0)) {
+      if (!saved) {
+        await this.live.show(EMPTY_TRACKED(this.now()), [[ADD_TRACKED, CLOSE]], { replaces });
+        return;
+      }
+      const shown: Shown = { messageId: 0, kind: "track", snapshot: saved, page: 0 };
+      const { text, buttons } = this.page(shown);
+      shown.messageId = await this.live.show(text, buttons, { replaces });
+      this.shown = shown;
+      return;
+    }
+    const messageId = await this.live.show("⏳ Loading…", [], { replaces });
+    if (action === "track") return this.addTracked(messageId, refs);
+    if (action === "untrack") {
+      const invalid = refs.filter((r) => parseRef(r) === null);
+      return this.removeTracked(
+        messageId,
+        refs.flatMap((r) => parseRef(r) ?? []),
+        invalid
+      );
+    }
+    await this.showTracked(messageId, { fresh: true });
+  }
+
+  // Button taps on the tracked list: tv (back to it), ta (asks what to add), tr / tr:<entry> (remove), tc (clear done).
+  private async onTrackTap(data: string, messageId: number, answer: (text?: string) => Promise<void>): Promise<void> {
+    if (!this.deps.tracked) {
+      await answer();
+      return;
+    }
+    if (data === "ta") {
+      await answer();
+      this.shown = null;
+      await this.live.update(messageId, TRACK_PROMPT, [[BACK_TO_TRACKED, CLOSE]]);
+      this.asked = { messageId, at: this.now().getTime(), for: "track" };
+      return;
+    }
+    if (data === "tr") {
+      await answer();
+      this.shown = null;
+      const { text, buttons } = this.removeScreen();
+      await this.live.update(messageId, text, buttons);
+      return;
+    }
+    if (data.startsWith("tr:")) {
+      await answer("Removed");
+      const entry = parseRef(data.slice(3));
+      await this.removeTracked(messageId, entry ? [entry] : []);
+      return;
+    }
+    if (data === "tc") {
+      const snapshot = (this.shown?.kind === "track" ? this.shown.snapshot : this.deps.stores.track.peek()?.snapshot) as
+        | TrackSnapshot
+        | undefined;
+      const done = snapshot ? this.trackedEntries().filter((e) => isDone(e, snapshot)) : [];
+      await answer(done.length > 0 ? "Cleared" : "Nothing is done yet");
+      await this.removeTracked(messageId, done);
+      return;
+    }
+    await answer();
+    await this.showTracked(messageId, {});
+  }
+
+  private removeScreen(note?: string): { text: string; buttons: ApiButton[][] } {
+    const entries = this.trackedEntries().slice(0, MAX_REMOVE_BUTTONS);
+    const rows: ApiButton[][] = [];
+    for (let i = 0; i < entries.length; i += 3) {
+      rows.push(entries.slice(i, i + 3).map((e) => ({ text: `✖ ${entryLabel(e)}`, data: `tr:${entryLabel(e)}` })));
+    }
+    const text = entries.length > 0 ? "➖ Tap what to stop following:" : "📭 Nothing tracked yet.";
+    return { text: `${text}${note ? `\n\n${note}` : ""}`, buttons: [...rows, [BACK_TO_TRACKED, CLOSE]] };
+  }
+
+  private async addTracked(messageId: number, refs: string[]): Promise<void> {
+    let note: string;
+    try {
+      const { added, already, invalid } = this.deps.tracked!.add(refs);
+      const parts: string[] = [];
+      if (added.length > 0) parts.push(`✔️ Following ${escapeHtml(added.map(entryLabel).join(", "))}`);
+      if (already.length > 0) parts.push(`Already followed: ${escapeHtml(already.map(entryLabel).join(", "))}`);
+      if (invalid.length > 0) parts.push(`⚠️ Not a PR or a Jira ticket: ${escapeHtml(clip(invalid.join(", "), ERROR_MAX))}`);
+      note = parts.join("\n") || "Nothing to add.";
+      if (added.length > 0) this.deps.log.info(`tracking ${added.map(entryLabel).join(", ")} from Telegram`);
+      await this.showTracked(messageId, { note, fresh: added.length > 0 });
+    } catch (err) {
+      this.deps.log.warn(`could not change the tracked list: ${errorMessage(err)}`);
+      await this.showTracked(messageId, { note: `⚠️ Not saved: ${this.reason(err)}` });
+    }
+  }
+
+  private async removeTracked(messageId: number, entries: TrackedEntry[], invalid: string[] = []): Promise<void> {
+    let note: string;
+    try {
+      const removed = this.deps.tracked!.remove(entries);
+      note =
+        removed.length > 0 ? `✔️ No longer following ${escapeHtml(removed.map(entryLabel).join(", "))}` : "Nothing to remove.";
+      if (invalid.length > 0) note += `\n⚠️ Not a PR or a Jira ticket: ${escapeHtml(clip(invalid.join(", "), ERROR_MAX))}`;
+      if (removed.length > 0) this.deps.log.info(`stopped tracking ${removed.map(entryLabel).join(", ")} from Telegram`);
+    } catch (err) {
+      this.deps.log.warn(`could not change the tracked list: ${errorMessage(err)}`);
+      note = `⚠️ Not saved: ${this.reason(err)}`;
+    }
+    await this.showTracked(messageId, { note });
+  }
+
+  // The tracked list on this message: from what is on screen or the last poll, or asked for now (after an addition).
+  private async showTracked(messageId: number, { note, fresh = false }: { note?: string; fresh?: boolean }): Promise<void> {
+    if (this.trackedEntries().length === 0) {
+      this.shown = null;
+      await this.live.update(messageId, EMPTY_TRACKED(this.now(), note), [[ADD_TRACKED, CLOSE]]);
+      return;
+    }
+    let loaded: Loaded | null = null;
+    const current = this.shown?.kind === "track" ? this.shown.snapshot : (this.deps.stores.track.peek()?.snapshot ?? null);
+    if (fresh || !current) {
+      if (fresh) await this.live.update(messageId, "⏳ Loading…", []);
+      try {
+        loaded = await this.loadFresh("track");
+      } catch (err) {
+        await this.live.update(messageId, `⚠️ Could not load the tracked PRs: ${this.reason(err)}`, [[BACK_TO_TRACKED, CLOSE]]);
+        return;
+      }
+    }
+    const snapshot = loaded?.snapshot ?? current!;
+    const notes = [note, loaded?.note].filter((n): n is string => n !== undefined);
+    this.shown = { messageId, kind: "track", snapshot, page: 0, ...(notes.length > 0 ? { note: notes.join("\n") } : {}) };
+    await this.draw(this.shown);
   }
 
   private async draw(shown: Shown): Promise<void> {
@@ -455,10 +656,20 @@ export class Bot {
     const lines = [`ℹ️ ${bold("Status")} · profile <code>${escapeHtml(profile)}</code>`];
     for (const kind of commands) {
       const saved = stores[kind].peek();
+      const icon = { mine: "📤", todo: "📥", track: "📌" }[kind];
+      if (kind === "track") {
+        const count = this.trackedEntries().length;
+        lines.push(
+          count === 0
+            ? `${icon} tracked: nothing yet`
+            : `${icon} tracked: ${plural(count, "entry", "entries")}${saved ? `, polled ${ago(saved.snapshot.generatedAt, this.now())} ago` : ", not polled yet"}`
+        );
+        continue;
+      }
       lines.push(
         saved
-          ? `${kind === "mine" ? "📤" : "📥"} ${kind}: ${saved.snapshot.prs.length} PRs, polled ${ago(saved.snapshot.generatedAt, this.now())} ago`
-          : `${kind === "mine" ? "📤" : "📥"} ${kind}: not polled yet`
+          ? `${icon} ${kind}: ${saved.snapshot.prs.length} PRs, polled ${ago(saved.snapshot.generatedAt, this.now())} ago`
+          : `${icon} ${kind}: not polled yet`
       );
     }
     lines.push(`⏱ every ${formatInterval(intervalMs)}`);

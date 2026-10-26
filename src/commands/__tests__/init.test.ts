@@ -96,7 +96,7 @@ describe("runInit", () => {
     expect(h.out.join("\n")).toContain("Needed: gh-pr-tools with a profile");
     expect(h.out.join("\n")).toContain("Jira is optional");
     expect(h.sent[0]!.keyboard).toEqual([
-      ["📥 Todo", "📤 Mine"],
+      ["📥 Todo", "📤 Mine", "📌 Tracked"],
       ["ℹ️ Status", "⚙️ Settings"],
     ]);
     expect(h.sent[0]!.text).toContain("/todo");

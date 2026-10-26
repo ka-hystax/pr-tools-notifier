@@ -33,7 +33,7 @@ describe("parseCommands", () => {
     expect(parseCommands(" mine ")).toEqual(["mine"]);
   });
 
-  test.each(["track", "", "mine,,todo", "mine,prd"])("rejects %j", (text) => {
+  test.each(["prd", "", "mine,,todo", "mine,prd"])("rejects %j", (text) => {
     expect(() => parseCommands(text)).toThrow(UsageError);
   });
 });
@@ -42,7 +42,7 @@ describe("parseCli", () => {
   test("applies the defaults", () => {
     expect(parseCli(["run", "-p", "work"])).toEqual({
       kind: "run",
-      config: { profile: "work", dryRun: false, once: false, commands: ["mine", "todo"] },
+      config: { profile: "work", dryRun: false, once: false, commands: ["mine", "todo", "track"] },
     });
   });
 
@@ -135,7 +135,7 @@ describe("parseCli", () => {
   test("leaves the profile open when it is not named: the only one is used", () => {
     expect(parseCli(["run"])).toEqual({
       kind: "run",
-      config: { dryRun: false, once: false, commands: ["mine", "todo"] },
+      config: { dryRun: false, once: false, commands: ["mine", "todo", "track"] },
     });
   });
 
@@ -147,6 +147,6 @@ describe("parseCli", () => {
 
   test("passes interval and command errors through as usage errors", () => {
     expect(() => parseCli(["run", "-p", "x", "--interval", "10s"])).toThrow(/at least 1m/);
-    expect(() => parseCli(["run", "-p", "x", "--commands", "track"])).toThrow(/unknown command 'track'/);
+    expect(() => parseCli(["run", "-p", "x", "--commands", "prd"])).toThrow(/unknown command 'prd'/);
   });
 });

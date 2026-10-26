@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-export type FixtureName = "mine" | "todo";
+export type FixtureName = "mine" | "todo" | "track";
 
 export function readFixtureText(name: FixtureName): string {
   return readFileSync(new URL(`./fixtures/snapshots/${name}.json`, import.meta.url), "utf8");

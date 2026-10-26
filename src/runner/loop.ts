@@ -61,8 +61,10 @@ export async function runLoop(deps: LoopDeps): Promise<boolean> {
     }
     if (signal.aborted) break;
 
+    // Following other people's PRs is extra: a gh-pr-tools too old for it must not stop mine and todo.
+    const errors = result.errors.filter((e) => !e.startsWith("track: "));
     const setup =
-      first && !result.ok ? SETUP_ERRORS.find(([pattern]) => result.errors.every((e) => pattern.test(e))) : undefined;
+      first && errors.length > 0 ? SETUP_ERRORS.find(([pattern]) => errors.every((e) => pattern.test(e))) : undefined;
     if (setup) {
       log.error(setup[1]);
       return false;

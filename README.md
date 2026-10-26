@@ -16,14 +16,15 @@ Should this be disabled while the request is in flight?
 
 ## What you get
 
-| Command | Notification                                                                                                                           |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `mine`  | a new thread waiting for you (bot threads are compact and silent), an approval with the merge verdict, changes requested, CI failed    |
-| `mine`  | 🎉 ready to merge, or 🚧 GitHub blocks the merge (for example, waiting for a code-owner team) — when it happens without a new approval |
-| `todo`  | review requested from you, a reply in a thread you started                                                                             |
-| `mine`  | with a Jira merge status (see [Waiting for Jira](#waiting-for-jira)): ⏳ review passed, then 🎉 when the ticket reaches that status    |
+| Command | Notification                                                                                                                                                                   |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mine`  | a new thread waiting for you (bot threads are compact and silent), an approval with the merge verdict, changes requested, CI failed                                            |
+| `mine`  | 🎉 ready to merge, or 🚧 GitHub blocks the merge (for example, waiting for a code-owner team) — when it happens without a new approval                                         |
+| `todo`  | review requested from you, a reply in a thread you started                                                                                                                     |
+| `mine`  | with a Jira merge status (see [Waiting for Jira](#waiting-for-jira)): ⏳ review passed, then 🎉 when the ticket reaches that status                                            |
+| `track` | other people's PRs and Jira tickets you follow (see [Following PRs and tickets](#following-prs-and-tickets)): 🆕 a new PR for a ticket, ✅ review passed, 🟣 merged, ✖️ closed |
 
-The approval verdict uses the approval threshold from your gh-pr-tools profile. Approvals given before a rebase or a small fix (stale) still count; the message then says `Approved 2/2 (2 stale)`, and GitHub's own merge state decides whether the merge is really allowed. Your own actions, threads you answered last and review requests on drafts never notify. Approvals below the threshold and bot threads arrive without a sound.
+The approval verdict uses the approval threshold from your gh-pr-tools profile. Approvals given before a rebase or a small fix (stale) still count; the message then says `Approved 2/2 (2 stale)`, and GitHub's own merge state decides whether the merge is really allowed. Your own actions, threads you answered last and review requests on drafts never notify. Approvals below the threshold and bot threads arrive without a sound, and so does everything about a followed PR except the four events above.
 
 ## Setup
 
@@ -79,6 +80,7 @@ While `run` is going, the bot also answers you. It has buttons under the input f
 | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | `/todo`     | PRs where you are a reviewer: 🔔 your turn (review requests, replies in your threads), then ⏳ waiting for authors |
 | `/mine`     | your open PRs: ✅ approved (ready, or one fix away), then 👀 in review                                             |
+| `/tracked`  | the PRs and Jira tickets you follow; `/track PRJ-1824 1281` adds, `/untrack` removes                               |
 | `/status`   | the profile, the last poll and the settings                                                                        |
 | `/settings` | view and change the poll interval and the Jira merge status                                                        |
 | `/help`     | what the bot can do (`/start` shows it too)                                                                        |
@@ -138,6 +140,42 @@ gh pr-tools -p PROFILE profile set jira-api-token      # prompts, hidden
 
 See the [Jira token](https://github.com/ek-hystax/gh-pr-tools#jira-token) section of gh-pr-tools for how to create the token. PRs with no ticket key in the branch or the title are announced as before. Without the token, the terminal warns `no Jira status came back` and the messages say `Jira status unavailable`, since the notifier cannot know whether the ticket is ready.
 
+### Following PRs and tickets
+
+QA engineers and managers often wait on PRs that are neither theirs nor theirs to review. Follow them by number or by Jira ticket, from Telegram or the terminal:
+
+```bash
+pr-tools-notifier track add PRJ-1824 1281 https://acme.atlassian.net/browse/PRJ-1744
+pr-tools-notifier track                     # what is followed, and where the list is
+pr-tools-notifier track rm 1281
+```
+
+In Telegram: `/track PRJ-1824 1281`, or `/track` alone (or `➕` under `/tracked`) and then the references as a message; `/untrack` and `➖` show a button per entry. A reference is a PR number, a PR link, a ticket key or a Jira link (a browse link, or a board link with `selectedIssue`).
+
+A ticket stands for every PR whose title names it, so a follow-up PR opened after testing shows up by itself (`🆕 New PR for PRJ-1824`). `/tracked` shows a ticket with its open PRs, or with the last merged one once none is open; PRs closed without merging are left out.
+
+```
+📌 Tracked · 3 · 15:49
+
+🎫 PRJ-1744 · In Review
+#1273 Audit log: backend… · alice
+✅ review passed · 2/2 · 9d
+#1274 Audit log: settings page… · alice
+⏳ review from ui · 1/2 · 9d
+
+🎫 PRJ-2050 · To Do
+no PR yet
+
+#1290 Faster CSV export · bob
+🔄 changes requested by carol · ❌ CI failed · 1/2 · 🎫 In Review · 4d
+                   [➕ Add] [➖ Remove] [🧹 Clear done]
+                          [🔄 Refresh] [✖ Close]
+```
+
+Notifications about a followed PR say whose it is (`📌 #1273 … · alice`). With a sound: a new PR for a ticket, ✅ review passed (enough approvals and nobody asking for changes; CI and conflicts do not stop testing), 🟣 merged and ✖️ closed. Without a sound: changes requested, a failed CI and CI passing again after a failure, conflicts, a Jira status move (`🎫 PRJ-1824: In Review → Approved`), approvals below the threshold and new threads (one short line each). Your own PRs are left to `mine`. `🧹 Clear done` removes the PRs that merged or closed and the tickets whose PRs all did; nothing is removed by itself.
+
+The list is a plain file, `~/.config/pr-tools-notifier/tracked/<profile>.txt`, one reference per line (`#` starts a comment), the format of gh-pr-tools' `track --list`. It is read again on every poll, so an edit by hand applies on the next one. Tracking needs a gh-pr-tools with `track --json`, and with Jira tickets in `track` for ticket entries; with an older one the PR numbers still work and ticket entries are reported as not taken. While the list is empty, nothing is polled for it.
+
 ### Settings
 
 Two optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Change them in Telegram with `/settings` (the interval with buttons, the Jira status as a message), edit the file by hand, or use the command:
@@ -164,11 +202,12 @@ pr-tools-notifier status                show the bot, its check against Telegram
 pr-tools-notifier config [set|unset]   show or change the settings (Jira merge status, poll interval)
 pr-tools-notifier reset [-y]            remove the saved token, settings and state (asks first; -y skips the question)
 pr-tools-notifier send-test             send sample notifications
-pr-tools-notifier run [-p PROFILE]      poll, notify and answer /todo and /mine
+pr-tools-notifier track [add|rm REF...] show or change the PRs and Jira tickets you follow (-p PROFILE)
+pr-tools-notifier run [-p PROFILE]      poll, notify and answer the bot's commands
 
   -p, --profile NAME        gh-pr-tools profile (default: the only one)
       --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
-      --commands LIST       mine,todo (default: both)
+      --commands LIST       mine,todo,track (default: all; track only polls a non-empty list)
       --once                poll once and exit
       --dry-run             print the messages instead of sending them
       --pr-tools PATH       run this gh-pr-tools entry script instead of `gh pr-tools`
@@ -183,7 +222,7 @@ pr-tools-notifier run [-p PROFILE]      poll, notify and answer /todo and /mine
 - **Failures.** After three polls in a row fail (an expired `gh` login, no network, a deleted profile), one `⚠️ Notifications are failing` message arrives. It explains the common causes in plain words (no connection to GitHub, a timeout, a rate limit, a `gh` login that expired, a missing profile, a gh-pr-tools too old for `--json`, Telegram refusing the bot) with what to check; anything else is shown as the raw error. The terminal always keeps the raw error. Another follows only after a successful poll.
 - **Merge state `unknown`.** GitHub sometimes answers "unknown" while it recomputes whether a PR merges cleanly. The notifier keeps the last real answer for the same commit instead of guessing, so a PR with conflicts is not announced as ready. With no earlier answer, an approval says `GitHub is still checking whether the branch can be merged`.
 - **Jira status.** A status that cannot be read for a moment (a failed lookup) keeps the last real one for the same ticket. The ticket moving back out of the merge status says `⏳ Review passed` again. Ticket and status are read from the `mine` snapshot only; `todo` is not affected.
-- **Load.** One poll costs about 6 GitHub GraphQL points for `mine` and `todo` together. At the default 1-minute interval that is about 7% of the 5000-point hourly limit; a longer `POLL_INTERVAL` lowers it.
+- **Load.** One poll costs about 6 GitHub GraphQL points for `mine` and `todo` together, and a few more for a non-empty tracked list. At the default 1-minute interval that is about 7% of the 5000-point hourly limit; a longer `POLL_INTERVAL` lowers it.
 - **Format changes.** A state file written by another version is set aside as `*.corrupt` and the next poll starts a fresh baseline silently.
 
 ## Where things are stored
@@ -196,6 +235,7 @@ pr-tools-notifier run [-p PROFILE]      poll, notify and answer /todo and /mine
 | `secret.key`                 | the key for the token (AES-256-GCM, mode 0600)         |
 | `settings.env`               | your settings, see [Settings](#settings)               |
 | `bot.json`                   | whether the bot greeted you, which answer is on screen |
+| `tracked/<profile>.txt`      | the PRs and Jira tickets you follow                    |
 | `state/<profile>-<cmd>.json` | the last snapshot, used as the baseline                |
 
 The key sits next to the token, so the token stays out of backups, synced dotfiles and greps, but not from someone who can read the whole directory. Revoke a leaked token with `/revoke` in @BotFather and run `init` again. To remove everything, delete the directory.

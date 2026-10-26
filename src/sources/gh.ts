@@ -22,6 +22,8 @@ export interface GhOptions {
   jiraRequired?: boolean | (() => boolean);
   // gh-pr-tools prints a line on stderr when it cannot do something (a rejected Jira token); the exit code stays 0.
   onWarning?: (line: string) => void;
+  // `track` reads its PRs and tickets from this list file; a list naming tickets needs a gh-pr-tools that takes them.
+  track?: { listPath: string; hasTickets: () => boolean };
 }
 
 export const defaultExec = promisify(execFile) as unknown as Exec;
@@ -51,6 +53,7 @@ export function ghSource({
   exec = defaultExec,
   jiraRequired = false,
   onWarning,
+  track,
 }: GhOptions): SnapshotSource {
   const file = prToolsPath ?? "gh";
   const prefix = prToolsPath ? [] : ["pr-tools"];
@@ -61,7 +64,8 @@ export function ghSource({
     let stdout: string;
     let stderr: string;
     try {
-      ({ stdout, stderr } = await exec(file, [...prefix, "-p", profile, command, "--json"], options));
+      const list = command === "track" && track ? ["--list", track.listPath] : [];
+      ({ stdout, stderr } = await exec(file, [...prefix, "-p", profile, command, "--json", ...list], options));
     } catch (err) {
       throw new Error(describeFailure(err, file, timeoutMs));
     }
@@ -79,6 +83,9 @@ export function ghSource({
       const needsJira = typeof jiraRequired === "function" ? jiraRequired() : jiraRequired;
       if (needsJira && snapshot.command === "mine" && snapshot.prs.some((pr) => pr.jira === undefined)) {
         throw new Error("gh-pr-tools does not report Jira tickets (needed for MERGE_STATUS)");
+      }
+      if (snapshot.command === "track" && snapshot.tickets === undefined && track?.hasTickets()) {
+        throw new Error("gh-pr-tools track does not take Jira tickets (the tracked list names some)");
       }
       return snapshot;
     } catch (err) {

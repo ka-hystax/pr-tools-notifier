@@ -7,6 +7,7 @@ import type { ConfigStore } from "../config/config.js";
 import { DEFAULT_INTERVAL_MS, formatInterval } from "../config/interval.js";
 import { stateDir } from "../config/paths.js";
 import type { Settings, SettingsStore } from "../config/settings.js";
+import { TrackedList } from "../config/tracked.js";
 import { DryRunSink } from "../runner/dryRun.js";
 import { runLoop } from "../runner/loop.js";
 import { FailureMonitor } from "../runner/monitor.js";
@@ -93,7 +94,13 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
   const mergeStatuses = () => (commands.includes("mine") ? settings().mergeStatuses : undefined);
   const intervalMs = () => pollInterval(options, settings());
   const dir = dryRun ? join(stateDir(), "dry-run") : stateDir();
-  const stores = { mine: new StateStore(dir, profile, "mine"), todo: new StateStore(dir, profile, "todo") };
+  const stores = {
+    mine: new StateStore(dir, profile, "mine"),
+    todo: new StateStore(dir, profile, "todo"),
+    track: new StateStore(dir, profile, "track"),
+  };
+  const tracked = new TrackedList(config.dir, profile);
+  const trackedEntries = () => tracked.read().entries;
 
   const locks: Lock[] = [];
   let listen = !dryRun && !once;
@@ -128,12 +135,18 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
   process.once("SIGTERM", stop);
 
   try {
+    // A skipped list line comes back on every poll: say it once.
+    const warned = new Set<string>();
     const source = ghSource({
       profile,
       signal: controller.signal,
-      onWarning: (line) => log.warn(line),
+      onWarning: (line) => {
+        if (!warned.has(line)) log.warn(line);
+        if (line.startsWith("gh pr-tools track:")) warned.add(line);
+      },
       ...(prToolsPath ? { prToolsPath } : {}),
       jiraRequired: () => mergeStatuses() !== undefined,
+      track: { listPath: tracked.path, hasTickets: () => trackedEntries().some((e) => e.kind === "ticket") },
     });
     const mode = dryRun ? "dry run" : "sending to Telegram";
     log.info(
@@ -142,6 +155,12 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
     const statuses = mergeStatuses();
     if (statuses) log.info(`"Time to merge" waits for the Jira status: ${statuses.join(", ")} (MERGE_STATUS in settings)`);
     if (options.intervalMs !== undefined) log.info("--interval is set, so POLL_INTERVAL in the settings is ignored");
+    if (commands.includes("track")) {
+      const count = trackedEntries().length;
+      log.info(
+        count > 0 ? `following ${count} PRs and tickets from ${tracked.path}` : "nothing tracked yet (/track in the bot)"
+      );
+    }
     const listener =
       bot && listen
         ? new Bot({
@@ -155,6 +174,7 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
             log,
             signal: controller.signal,
             settings,
+            tracked,
             ...(settingsStore ? { settingsStore } : {}),
             ...(options.intervalMs !== undefined ? { intervalFlagMs: options.intervalMs } : {}),
           }).run()
@@ -162,7 +182,15 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
     const ok = await runLoop({
       tick: () => {
         const statuses = mergeStatuses();
-        return runTick({ commands, source, stores, sink, log, ...(statuses ? { mergeStatuses: statuses } : {}) });
+        return runTick({
+          commands,
+          source,
+          stores,
+          sink,
+          log,
+          hasTracked: () => trackedEntries().length > 0,
+          ...(statuses ? { mergeStatuses: statuses } : {}),
+        });
       },
       sink,
       monitor: new FailureMonitor(),

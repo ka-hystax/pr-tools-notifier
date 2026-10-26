@@ -2,19 +2,27 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { parseSnapshot, type MineSnapshot, type Snapshot, type TodoSnapshot } from "../../contract/snapshot.js";
+import {
+  parseSnapshot,
+  type MineSnapshot,
+  type Snapshot,
+  type TodoSnapshot,
+  type TrackSnapshot,
+} from "../../contract/snapshot.js";
 import { readFixture } from "../../__tests__/fixtures.js";
 import type { Command, Logger, SnapshotSource } from "../../runner/types.js";
 import { StateStore } from "../../state/store.js";
 import { TelegramError, type BotCommand, type EditParams, type SendParams, type Update } from "../../telegram/api.js";
-import { Bot, BOT_COMMANDS, KEYBOARD, parseAction, type BotDeps } from "../bot.js";
+import { Bot, BOT_COMMANDS, commandArgs, KEYBOARD, parseAction, type BotDeps } from "../bot.js";
 import { BotStateStore } from "../state.js";
 import { SettingsStore } from "../../config/settings.js";
+import { TrackedList } from "../../config/tracked.js";
 import type { BotApi } from "../types.js";
 
 const CHAT = "42";
 const mine = parseSnapshot(readFixture("mine")) as MineSnapshot;
 const todo = parseSnapshot(readFixture("todo")) as TodoSnapshot;
+const track = parseSnapshot(readFixture("track")) as TrackSnapshot;
 const GENERATED = Date.parse(mine.generatedAt);
 
 let root: string;
@@ -85,12 +93,20 @@ function harness(over: Partial<BotDeps> = {}, options: { saved?: Partial<Record<
     warn: (m) => logs.push(`warn: ${m}`),
     error: (m) => logs.push(`error: ${m}`),
   };
-  const stores = { mine: new StateStore(root, "work", "mine"), todo: new StateStore(root, "work", "todo") };
+  const stores = {
+    mine: new StateStore(root, "work", "mine"),
+    todo: new StateStore(root, "work", "todo"),
+    track: new StateStore(root, "work", "track"),
+  };
   const saved = options.saved ?? { mine, todo };
   for (const [kind, snapshot] of Object.entries(saved)) stores[kind as Command].save({ snapshot, missingTicks: {} });
   const fetched: Command[] = [];
   const failures: { source?: Error } = {};
-  const fresh: Record<Command, Snapshot> = { mine: structuredClone(mine), todo: structuredClone(todo) };
+  const fresh: Record<Command, Snapshot> = {
+    mine: structuredClone(mine),
+    todo: structuredClone(todo),
+    track: structuredClone(track),
+  };
   const source: SnapshotSource = async (kind) => {
     fetched.push(kind);
     if (failures.source) throw failures.source;
@@ -162,6 +178,10 @@ describe("parseAction", () => {
     ["ℹ️ Status", "status"],
     ["/settings", "settings"],
     ["⚙️ Settings", "settings"],
+    ["/tracked", "tracked"],
+    ["📌 Tracked", "tracked"],
+    ["/track PRJ-1 2", "track"],
+    ["/untrack", "untrack"],
     ["/nope", "unknown"],
     ["hello", "unknown"],
     ["", "unknown"],
@@ -633,5 +653,109 @@ describe("settings", () => {
     await h.bot.handle(h.tap("s", h.api.sent[0]!.id));
     expect(h.api.sent).toHaveLength(1);
     expect(last(h).text).toContain("⚙️ <b>Settings</b>");
+  });
+});
+
+describe("tracking", () => {
+  function withTracked(over: Partial<BotDeps> = {}, saved?: Partial<Record<Command, Snapshot>>) {
+    const tracked = new TrackedList(root, "work");
+    const h = harness({ commands: ["mine", "todo", "track"], tracked, ...over }, saved ? { saved } : {});
+    return { ...h, tracked, file: () => tracked.read().entries.map((e) => e.text) };
+  }
+  const last = (h: ReturnType<typeof harness>) => h.api.edits.at(-1)!;
+
+  test("splits what follows a command", () => {
+    expect(commandArgs("/track PRJ-1824, 1281\n#12")).toEqual(["PRJ-1824", "1281", "#12"]);
+    expect(commandArgs("/untrack@my_bot")).toEqual([]);
+  });
+
+  test("/tracked on an empty list says how to start, without asking GitHub", async () => {
+    const h = withTracked();
+    await h.bot.handle(h.message("📌 Tracked", 11));
+    expect(h.api.sent[0]!.params.text).toContain("Nothing tracked yet");
+    expect(buttonData(h.api.sent[0]!.params)).toEqual(["ta", "x"]);
+    expect(h.fetched).toEqual([]);
+  });
+
+  test("/track with references adds them and shows the list as GitHub has it now", async () => {
+    const h = withTracked();
+    await h.bot.handle(h.message("/track PRJ-2001 203 foo", 11));
+    expect(h.file()).toEqual(["PRJ-2001", "203"]);
+    expect(h.fetched).toEqual(["track"]);
+    const shown = last(h);
+    expect(shown.text).toContain("📌 Tracked</b> · 2");
+    expect(shown.text).toContain("✔️ Following PRJ-2001, #203");
+    expect(shown.text).toContain("⚠️ Not a PR or a Jira ticket: foo");
+    expect(buttonData(shown)).toEqual(["ta", "tr", "tc", "r:track", "x"]);
+    expect(h.logs).toContain("info: tracking PRJ-2001, #203 from Telegram");
+  });
+
+  test("/track alone asks, and takes the next message as the references", async () => {
+    const h = withTracked();
+    await h.bot.handle(h.message("/track", 11));
+    expect(h.api.sent[0]!.params.text).toContain("Send what to follow");
+    expect(buttonData(h.api.sent[0]!.params)).toEqual(["tv", "x"]);
+    await h.bot.handle(h.message("PRJ-2050, https://github.com/acme/web/pull/202", 12));
+    expect(h.file()).toEqual(["PRJ-2050", "https://github.com/acme/web/pull/202"]);
+    expect(h.api.deleted).toContain(12);
+    expect(last(h).text).toContain("no PR yet");
+  });
+
+  test("➕ asks in place, and a command instead cancels the question", async () => {
+    const h = withTracked();
+    h.tracked.add(["203"]);
+    await h.bot.handle(h.message("/tracked", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("ta", id));
+    expect(last(h).text).toContain("Send what to follow");
+    await h.bot.handle(h.message("/mine", 12));
+    await h.bot.handle(h.message("PRJ-2001", 13));
+    expect(h.file()).toEqual(["203"]);
+  });
+
+  test("➖ lists the entries as buttons and removes the one tapped", async () => {
+    const h = withTracked({}, { track });
+    h.tracked.add(["PRJ-2001", "203"]);
+    await h.bot.handle(h.message("/tracked", 11));
+    const id = h.api.sent[0]!.id;
+    expect(h.fetched).toEqual([]); // the saved poll is recent
+    await h.bot.handle(h.tap("tr", id));
+    expect(last(h).text).toBe("➖ Tap what to stop following:");
+    expect(buttonData(last(h))).toEqual(["tr:PRJ-2001", "tr:#203", "tv", "x"]);
+    await h.bot.handle(h.tap("tr:#203", id));
+    expect(h.file()).toEqual(["PRJ-2001"]);
+    expect(last(h).text).toContain("✔️ No longer following #203");
+    expect(h.api.answers.at(-1)).toMatchObject({ text: "Removed" });
+  });
+
+  test("🧹 removes what is done and keeps the rest", async () => {
+    const h = withTracked({}, { track });
+    h.tracked.add(["PRJ-2001", "203", "PRJ-2050"]);
+    await h.bot.handle(h.message("/tracked", 11));
+    await h.bot.handle(h.tap("tc", h.api.sent[0]!.id));
+    expect(h.file()).toEqual(["PRJ-2001", "PRJ-2050"]);
+    expect(last(h).text).toContain("✔️ No longer following #203");
+    expect(buttonData(last(h))).toEqual(["ta", "tr", "r:track", "x"]);
+  });
+
+  test("/untrack with references removes them", async () => {
+    const h = withTracked({}, { track });
+    h.tracked.add(["PRJ-2001", "203"]);
+    await h.bot.handle(h.message("/untrack prj-2001 PRJ1", 11));
+    expect(h.file()).toEqual(["203"]);
+    expect(last(h).text).toContain("✔️ No longer following PRJ-2001\n⚠️ Not a PR or a Jira ticket: PRJ1");
+  });
+
+  test("a run that does not poll track says so", async () => {
+    const h = harness();
+    await h.bot.handle(h.message("/track PRJ-1", 11));
+    expect(h.api.sent[0]!.params.text).toContain("does not follow other PRs");
+  });
+
+  test("/status counts the tracked entries", async () => {
+    const h = withTracked({}, { track });
+    h.tracked.add(["PRJ-2001", "203"]);
+    await h.bot.handle(h.message("/status", 11));
+    expect(h.api.sent[0]!.params.text).toContain("📌 tracked: 2 entries, polled 0m ago");
   });
 });

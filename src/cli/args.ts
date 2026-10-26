@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { MAX_INTERVAL_MS, MIN_INTERVAL_MS, readInterval } from "../config/interval.js";
 import type { ConfigAction } from "../commands/config.js";
+import type { TrackAction } from "../commands/track.js";
 import type { Command } from "../runner/types.js";
 
 export class UsageError extends Error {}
@@ -14,14 +15,17 @@ commands:
   config set KEY VALUE   change a setting; config unset KEY removes it
   reset [-y]             remove the saved bot token, settings and state (asks first; -y skips the question)
   send-test              send sample notifications to check the setup
-  run [-p PROFILE]       poll gh-pr-tools, send notifications and answer /todo and /mine
+  run [-p PROFILE]       poll gh-pr-tools, send notifications and answer the bot's commands
+  track [-p PROFILE]     show the PRs and Jira tickets you follow
+  track add REF...       follow PRs (1281, a PR link) or Jira tickets (PRJ-1824, a Jira link)
+  track rm REF...        stop following them
 
 options of run:
   -p, --profile NAME        gh-pr-tools profile to use (default: the only one)
       --dry-run             print the messages instead of sending them
       --once                run a single poll and exit
       --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
-      --commands LIST       comma-separated: mine,todo (default: both)
+      --commands LIST       comma-separated: mine,todo,track (default: all; track polls only a non-empty list)
       --pr-tools PATH       run this gh-pr-tools entry script instead of \`gh pr-tools\`
   -v, --version             print the version
   -h, --help                show this help`;
@@ -43,6 +47,7 @@ export type Parsed =
   | { kind: "status" }
   | { kind: "reset"; yes: boolean }
   | { kind: "config"; action: ConfigAction }
+  | { kind: "track"; action: TrackAction; profile?: string; prToolsPath?: string }
   | { kind: "run"; config: RunConfig };
 
 export function parseInterval(text: string): number {
@@ -59,7 +64,9 @@ export function parseInterval(text: string): number {
 export function parseCommands(text: string): Command[] {
   const commands: Command[] = [];
   for (const part of text.split(",").map((p) => p.trim())) {
-    if (part !== "mine" && part !== "todo") throw new UsageError(`unknown command '${part}' in --commands (use mine, todo)`);
+    if (part !== "mine" && part !== "todo" && part !== "track") {
+      throw new UsageError(`unknown command '${part}' in --commands (use mine, todo, track)`);
+    }
     if (!commands.includes(part)) commands.push(part);
   }
   return commands;
@@ -79,6 +86,16 @@ function parseConfigAction(args: string[]): ConfigAction {
     return { type: "unset", key };
   }
   throw new UsageError(`unknown config action '${action}' (use set or unset)`);
+}
+
+function parseTrackAction(args: string[]): TrackAction {
+  const [action, ...refs] = args;
+  if (action === undefined) return { type: "show" };
+  if (action === "add" || action === "rm") {
+    if (refs.length === 0) throw new UsageError(`usage: track ${action} REF... (1281, a PR link, PRJ-1824 or a Jira link)`);
+    return { type: action, refs };
+  }
+  throw new UsageError(`unknown track action '${action}' (use add or rm)`);
 }
 
 export function parseCli(argv: string[]): Parsed {
@@ -107,6 +124,13 @@ export function parseCli(argv: string[]): Parsed {
   if (values.version) return { kind: "version" };
   if (values.help || positionals.length === 0) return { kind: "help" };
   if (positionals[0] === "config") return { kind: "config", action: parseConfigAction(positionals.slice(1)) };
+  if (positionals[0] === "track") {
+    if (values.yes) throw new UsageError("--yes is only for reset");
+    const track: Extract<Parsed, { kind: "track" }> = { kind: "track", action: parseTrackAction(positionals.slice(1)) };
+    if (values.profile) track.profile = values.profile;
+    if (values["pr-tools"]) track.prToolsPath = values["pr-tools"];
+    return track;
+  }
   if (positionals.length > 1) throw new UsageError(`unexpected argument '${positionals[1]}'`);
   if (values.yes && positionals[0] !== "reset") throw new UsageError("--yes is only for reset");
   if (positionals[0] === "reset") return { kind: "reset", yes: values.yes ?? false };
@@ -117,7 +141,7 @@ export function parseCli(argv: string[]): Parsed {
   const config: RunConfig = {
     dryRun: values["dry-run"] ?? false,
     once: values.once ?? false,
-    commands: parseCommands(values.commands ?? "mine,todo"),
+    commands: parseCommands(values.commands ?? "mine,todo,track"),
   };
   if (values.profile) config.profile = values.profile;
   if (values.interval !== undefined) config.intervalMs = parseInterval(values.interval);
