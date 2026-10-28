@@ -15,6 +15,7 @@ describe("buildTestMessages", () => {
   test("covers every notification kind", () => {
     const all = messages.map((m) => m.text).join("\n");
     for (const marker of ["💬", "🤖", "↩️", "✅", "🎉", "🚧", "⏳", "🔄", "🔔", "❌"]) expect(all).toContain(marker);
+    for (const marker of ["📌", "🆕", "🟣", "✖️", "🔀", "🎫", "✔️"]) expect(all).toContain(marker);
   });
 
   test("includes both loud and silent messages, each with a button", () => {

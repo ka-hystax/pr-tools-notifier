@@ -65,6 +65,8 @@ const twoApprovals = approval({ approvers: ["alice", "carol"], decision: "approv
 const P101 = pr(101, "PRJ-1001. Add export button");
 const P102 = pr(102, "PRJ-1002. Fix locale fallback");
 const P201 = pr(201, "PRJ-2001. Add audit log", "alice");
+const T301: PrRef = { ...pr(301, "PRJ-3001. Export the audit log", "bob"), tracked: true };
+const followed = (label: string, event: NotifyEvent) => ({ label: `followed PR: ${label}`, events: [event] });
 
 // One entry per message, covering every kind of notification and both loud and silent delivery.
 export const SAMPLE_MESSAGES: { label: string; events: NotifyEvent[] }[] = [
@@ -213,4 +215,16 @@ export const SAMPLE_MESSAGES: { label: string; events: NotifyEvent[] }[] = [
   },
   { label: "review requested", events: [{ kind: "review_requested", pr: P201 }] },
   { label: "CI failed", events: [{ kind: "ci_failed", pr: P102, failedJobs: ["Build UI / build_image", "e2e (chromium)"] }] },
+  followed("a new PR for the ticket", { kind: "tracked_new_pr", pr: T301, ticket: ticket("In Progress", "PRJ-3001") }),
+  followed("review passed", { kind: "tracked_passed", pr: T301, approval: twoApprovals, by: ["carol"] }),
+  followed("merged", { kind: "tracked_merged", pr: T301 }),
+  followed("closed without merging", { kind: "tracked_closed", pr: T301 }),
+  followed("the ticket moved (silent)", {
+    kind: "tracked_ticket_moved",
+    pr: T301,
+    ticket: ticket("Approved", "PRJ-3001"),
+    from: "In Review",
+  }),
+  followed("conflicts (silent)", { kind: "tracked_conflicts", pr: T301 }),
+  followed("CI passes again (silent)", { kind: "tracked_ci_passed", pr: T301 }),
 ];
