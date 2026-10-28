@@ -746,6 +746,12 @@ describe("tracking", () => {
     expect(last(h).text).toContain("✔️ No longer following PRJ-2001\n⚠️ Not a PR or a Jira ticket: PRJ1");
   });
 
+  test("/untrack with nothing it can remove says so", async () => {
+    const h = withTracked({}, { track });
+    await h.bot.handle(h.message("/untrack PRJ1", 11));
+    expect(last(h).text).toContain("Nothing to remove.\n⚠️ Not a PR or a Jira ticket: PRJ1");
+  });
+
   test("a run that does not poll track says so", async () => {
     const h = harness();
     await h.bot.handle(h.message("/track PRJ-1", 11));
@@ -907,6 +913,24 @@ describe("several profiles", () => {
     await h.bot.handle(h.tap("tq:1", h.api.sent[0]!.id));
     expect(h.web.list()).toEqual(["12"]);
     expect(h.ops.list()).toEqual([]);
+  });
+
+  test("/untrack of a PR link leaves a list of another repo alone", async () => {
+    const h = twoProfiles();
+    h.web.profile.tracked!.add(["5"]);
+    await h.bot.handle(h.message("/untrack https://github.com/acme/ops/pull/5", 11));
+    expect(h.web.list()).toEqual(["5"]);
+    expect(last(h).text).toContain("Nothing to remove.");
+  });
+
+  test("probe failures are listed in the order of the profiles", async () => {
+    const fail = (ms: number) => async (): Promise<TrackSnapshot> => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      throw new Error(`down ${ms}`);
+    };
+    const h = twoProfiles({ web: fail(20), ops: fail(1) });
+    await h.bot.handle(h.message("/track PRJ-1", 11));
+    expect(last(h).text).toContain("⚠️ Could not ask web: down 20\n⚠️ Could not ask ops: down 1");
   });
 
   test("➖ names the profile of a label two lists share, and removes it from that one", async () => {

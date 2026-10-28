@@ -772,7 +772,7 @@ export class Bot {
     }
     const notes: string[] = [];
     const lookups = entries.filter((e) => e.kind === "ticket" || linkRepo(e) !== null);
-    let answers: { profile: BotProfile; snapshot?: TrackSnapshot }[] = [];
+    let answers: { profile: BotProfile; snapshot?: TrackSnapshot; error?: unknown }[] = [];
     if (lookups.length > 0) {
       await this.live.update(messageId, "⏳ Loading…", []);
       answers = await Promise.all(
@@ -780,13 +780,14 @@ export class Bot {
           try {
             if (!profile.probe) throw new Error("cannot look it up");
             return { profile, snapshot: await profile.probe(lookups.map((e) => e.text)) };
-          } catch (err) {
-            notes.push(`⚠️ Could not ask ${escapeHtml(profile.profile)}: ${this.reason(err)}`);
-            return { profile };
+          } catch (error) {
+            return { profile, error };
           }
         })
       );
     }
+    for (const a of answers)
+      if ("error" in a) notes.push(`⚠️ Could not ask ${escapeHtml(a.profile.profile)}: ${this.reason(a.error)}`);
     const unknown = answers.filter((a) => !a.snapshot).map((a) => a.profile);
     const additions = new Map<BotProfile, string[]>();
     const add = (profile: BotProfile, entry: TrackedEntry) =>
@@ -836,16 +837,18 @@ export class Bot {
         invalid.push(ref.trim());
         continue;
       }
-      let holders = targets.filter((p) => this.entries(p).some((e) => sameEntry(e, entry)));
+      // A link names its repo: a list of another repo only follows a PR of the same number.
       const repo = linkRepo(entry);
-      const sameRepo = repo === null ? [] : holders.filter((p) => this.repoOf(p) === repo);
-      if (sameRepo.length > 0) holders = sameRepo;
+      const holders = targets.filter(
+        (p) => this.entries(p).some((e) => sameEntry(e, entry)) && (repo === null || [null, repo].includes(this.repoOf(p)))
+      );
       if (entry.kind === "pr" && holders.length > 1) {
         const text = `➖ ${bold(entryLabel(entry))} is followed in several profiles. Stop following it in:`;
         questions.push({ action: "remove", entry, candidates: holders, all: false, text });
       } else for (const p of holders) removals.set(p, [...(removals.get(p) ?? []), entry]);
     }
     const notes = this.removeEntries([...removals].map(([profile, entries]) => ({ profile, entries })));
+    if (notes.length === 0 && questions.length === 0) notes.push("Nothing to remove.");
     if (invalid.length > 0) notes.push(`⚠️ Not a PR or a Jira ticket: ${escapeHtml(clip(invalid.join(", "), ERROR_MAX))}`);
     this.choosing = { messageId, action: "remove", questions, notes, changed: [] };
     await this.askNext();
