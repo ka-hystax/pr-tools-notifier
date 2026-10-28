@@ -26,6 +26,16 @@ describe("FailureMonitor", () => {
     expect(alert).toContain("gh auth status");
   });
 
+  test("an outage reported another way stays quiet until a poll succeeds", () => {
+    const monitor = new FailureMonitor(3);
+    monitor.markAlerted();
+    for (const time of ["10:00", "10:01", "10:02"]) monitor.record(bad(), at(time));
+    expect(monitor.pendingAlert("UTC")).toBeNull();
+    monitor.record(ok, at("10:03"));
+    for (const time of ["10:04", "10:05", "10:06"]) monitor.record(bad(), at(time));
+    expect(monitor.pendingAlert("UTC")).not.toBeNull();
+  });
+
   test("names the profile, for a run that polls several", () => {
     const monitor = new FailureMonitor(1, "other");
     monitor.record(bad(), at("10:00"));

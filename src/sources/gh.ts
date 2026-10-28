@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { parseSnapshot, type TrackSnapshot } from "../contract/snapshot.js";
+import type { RateLimit } from "../runner/rateLimit.js";
 import { errorMessage, type SnapshotSource } from "../runner/types.js";
 
 export interface ExecOptions {
@@ -109,4 +110,28 @@ export function ghTrackProbe(options: Omit<GhOptions, "onWarning" | "track" | "j
       rmSync(dir, { recursive: true, force: true });
     }
   };
+}
+
+// The hourly GitHub limit that ran out, from `gh api rate_limit` (free, and answered even when limited);
+// null when none is nearly used up, as with a secondary rate limit.
+export async function readRateLimit({
+  signal,
+  exec = defaultExec,
+  timeoutMs = 30_000,
+}: Pick<GhOptions, "signal" | "exec" | "timeoutMs"> = {}): Promise<RateLimit | null> {
+  const options: ExecOptions = { timeout: timeoutMs, maxBuffer: 1024 * 1024, encoding: "utf8" };
+  if (signal) options.signal = signal;
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("gh", ["api", "rate_limit"], options));
+  } catch (err) {
+    throw new Error(describeFailure(err, "gh", timeoutMs));
+  }
+  const resources = (JSON.parse(stdout) as { resources?: Record<string, { limit: number; remaining: number; reset: number }> })
+    .resources;
+  for (const resource of ["graphql", "core"] as const) {
+    const r = resources?.[resource];
+    if (r && r.remaining < r.limit * 0.05) return { resource, limit: r.limit, resetAt: new Date(r.reset * 1000) };
+  }
+  return null;
 }

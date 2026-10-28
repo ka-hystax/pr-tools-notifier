@@ -11,9 +11,10 @@ import { TrackedList } from "../config/tracked.js";
 import { DryRunSink } from "../runner/dryRun.js";
 import { runLoop } from "../runner/loop.js";
 import { FailureMonitor } from "../runner/monitor.js";
+import { RateLimitNotice } from "../runner/rateLimit.js";
 import { runTick } from "../runner/tick.js";
 import { errorMessage, type Logger } from "../runner/types.js";
-import { ghSource, ghTrackProbe } from "../sources/gh.js";
+import { ghSource, ghTrackProbe, readRateLimit } from "../sources/gh.js";
 import { listProfiles, ProfileError } from "../sources/profiles.js";
 import { acquireLock, LockError, type Lock } from "../state/lock.js";
 import { StateStore } from "../state/store.js";
@@ -196,12 +197,20 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
             ...(options.intervalMs !== undefined ? { intervalFlagMs: options.intervalMs } : {}),
           }).run()
         : Promise.resolve();
+    const rateLimit = new RateLimitNotice({
+      read: () => readRateLimit({ signal: controller.signal }),
+      sink,
+      log,
+      intervalMs,
+      intervalFlag: options.intervalMs !== undefined,
+    });
     const results = await Promise.all(
       polled.map(async (profile) => {
+        const monitor = new FailureMonitor(3, several ? profile.name : undefined);
         const ok = await runLoop({
-          tick: () => {
+          tick: async () => {
             const statuses = profile.mergeStatuses();
-            return runTick({
+            const result = await runTick({
               commands: profile.commands,
               source: profile.source,
               stores: profile.stores,
@@ -211,9 +220,12 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
               ...(statuses ? { mergeStatuses: statuses } : {}),
               ...(several ? { repoLabel: true } : {}),
             });
+            // The rate limit notice says more than the general alert would, so that one is not sent for it.
+            if (!result.ok && (await rateLimit.check(result.errors))) monitor.markAlerted();
+            return result;
           },
           sink,
-          monitor: new FailureMonitor(3, several ? profile.name : undefined),
+          monitor,
           log: profile.log,
           intervalMs,
           once,

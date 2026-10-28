@@ -77,7 +77,7 @@ const RULES: [RegExp, (match: RegExpExecArray) => Explained][] = [
     /rate limit/i,
     () => ({
       summary: "GitHub API rate limit reached.",
-      hint: "Polling resumes after the limit resets; a longer <code>--interval</code> lowers the usage.",
+      hint: "Polling resumes after the limit resets; a longer POLL_INTERVAL lowers the usage.",
     }),
   ],
   [

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
-import { ghSource, ghTrackProbe, type Exec, type ExecOptions } from "../gh.js";
+import { ghSource, ghTrackProbe, readRateLimit, type Exec, type ExecOptions } from "../gh.js";
 import { readFixtureText } from "../../__tests__/fixtures.js";
 
 const mineJson = readFixtureText("mine");
@@ -174,5 +174,30 @@ describe("ghTrackProbe", () => {
     await expect(ghTrackProbe({ profile: "w", exec: fake(mineJson).exec })(["1"])).rejects.toThrow(
       /expected a track snapshot, got mine/
     );
+  });
+});
+
+describe("readRateLimit", () => {
+  const limits = (graphql: number, core = 4000) =>
+    JSON.stringify({
+      resources: {
+        core: { limit: 5000, remaining: core, reset: 1_792_000_000 },
+        graphql: { limit: 5000, remaining: graphql, reset: 1_792_003_600 },
+      },
+    });
+
+  test("returns the hourly limit that is nearly used up, with its reset time", async () => {
+    const { exec, calls } = fake(limits(12));
+    expect(await readRateLimit({ exec })).toEqual({ resource: "graphql", limit: 5000, resetAt: new Date(1_792_003_600_000) });
+    expect(calls[0]).toMatchObject({ file: "gh", args: ["api", "rate_limit"] });
+    expect(await readRateLimit({ exec: fake(limits(4000, 3)).exec })).toMatchObject({ resource: "core" });
+  });
+
+  test("returns null when no hourly limit ran out, as with a secondary limit", async () => {
+    expect(await readRateLimit({ exec: fake(limits(4000)).exec })).toBeNull();
+  });
+
+  test("explains a failure to ask", async () => {
+    await expect(readRateLimit({ exec: failing({ code: "ENOENT" }) })).rejects.toThrow("gh was not found in PATH");
   });
 });
