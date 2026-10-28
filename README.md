@@ -37,7 +37,7 @@ gh extension install ek-hystax/gh-pr-tools   # or: gh extension upgrade pr-tools
 gh pr-tools init
 ```
 
-A profile covers one repo; for another repo, run `gh pr-tools init` again with a new name (see [Several repos](#several-repos)). To change one setting of a profile later, use `gh pr-tools -p NAME profile set KEY [VALUE]` (`profile show NAME` lists them).
+A profile covers one repo; for another repo, run `gh pr-tools init` again with a new name (see [Several repos](#several-repos)).
 
 **2. The notifier.**
 
@@ -277,7 +277,7 @@ The key sits next to the token, so the token stays out of backups, synced dotfil
 
 ## Maintenance
 
-- **Changing your gh-pr-tools profile** (`gh pr-tools -p NAME profile set KEY [VALUE]`). It is read on every poll, so changes apply without a restart; a new profile needs a restart of `run`. A different `REPO` or a new profile name starts a fresh baseline silently (state files of an old name stay in `state/`). A lower approval threshold can produce a 🎉 or 🚧 for PRs that now count as approved. A different GitHub username announces its pending review requests once.
+- **Changing your gh-pr-tools profile.** It is read on every poll, so changes apply without a restart; a new profile needs a restart of `run`. A different `REPO` or a new profile name starts a fresh baseline silently (state files of an old name stay in `state/`). A lower approval threshold can produce a 🎉 or 🚧 for PRs that now count as approved. A different GitHub username announces its pending review requests once.
 - **Deleted profile or logged-out `gh`.** A profile name that does not exist, or a gh-pr-tools too old for `--json`, stops `run` at once when it shows up on the first poll, together with the other profiles it polls. Later, every poll fails. After three, one `⚠️` message arrives with the reason and what to check (for example `gh pr-tools profile list`); then Telegram stays quiet until a poll succeeds, while the terminal keeps logging each failure. The state is kept, so restoring the profile for the same repo continues where it stopped.
 - **Dead bot.** `pr-tools-notifier status` checks the token against Telegram. `run` does the same at start and stops with `getMe: 401 …` if Telegram rejects it. A token that dies later, or a bot you blocked, shows up in the terminal as `delivery: … 401` or `403` (Telegram cannot carry that alert). The events are kept and arrive after the fix: unblock the bot and press Start, or, for a deleted or revoked bot, stop `run`, run `pr-tools-notifier init` with a new token and start `run` again.
 - **Removing everything.** Check what exists with `pr-tools-notifier status` (bot, last poll per profile, whether a `run` is active). `pr-tools-notifier reset` deletes `~/.config/pr-tools-notifier/` after asking (`-y` skips the question) and refuses while `run` is active. gh-pr-tools settings are not touched. The bot stays in Telegram until you send `/deletebot` (or `/revoke` for the token only) to @BotFather. To drop the command too, run `npm unlink -g pr-tools-notifier` (pnpm: `pnpm remove -g pr-tools-notifier`) and delete the clone.
