@@ -13,7 +13,15 @@ import type { BotStateStore } from "./state.js";
 import type { BotApi } from "./types.js";
 import { isDone, renderTrackedParts } from "./tracked.js";
 import { ago, plural, profileHeading, renderLists } from "./views.js";
-import { CLOSE, intervalScreen, savedNote, settingsScreen, statusPrompt, type SettingsView } from "./settings.js";
+import {
+  CLOSE,
+  intervalProblem,
+  intervalScreen,
+  savedNote,
+  settingsScreen,
+  statusPrompt,
+  type SettingsView,
+} from "./settings.js";
 
 import { KEYBOARD } from "./keyboard.js";
 
@@ -168,8 +176,8 @@ export class Bot {
   private readonly freshMs: number;
   private readonly strangers = new Set<number>();
   private shown: Shown | null = null;
-  // Set while the bot waits for a plain message, on the message it asked in: a Jira status, or what to track.
-  private asked: { messageId: number; at: number; for: "merge_status" | "track" } | null = null;
+  // Set while the bot waits for a plain message, on the message it asked in: an interval, a Jira status, or what to track.
+  private asked: { messageId: number; at: number; for: "interval" | "merge_status" | "track" } | null = null;
   // Set while /track or /untrack asks which profile a reference is for, one question at a time.
   private choosing: {
     messageId: number;
@@ -259,6 +267,7 @@ export class Bot {
       if (asked.messageId === this.live.current && this.now().getTime() - asked.at < ANSWER_WITHIN_MS) {
         await this.live.remove(replaces);
         if (asked.for === "track") await this.addTracked(asked.messageId, splitRefs(message.text));
+        else if (asked.for === "interval") await this.typedInterval(asked.messageId, message.text);
         else await this.saveSetting(asked.messageId, "MERGE_STATUS", message.text);
         return;
       }
@@ -328,6 +337,20 @@ export class Bot {
     await this.live.update(messageId, text, buttons);
   }
 
+  // The presets as buttons; any other interval can be sent as a message.
+  private async askInterval(messageId: number, note?: string): Promise<void> {
+    const { text, buttons } = intervalScreen(this.settingsView(note));
+    await this.live.update(messageId, text, buttons);
+    this.asked = { messageId, at: this.now().getTime(), for: "interval" };
+  }
+
+  // A typed interval is saved like a preset; one that cannot be is explained, and the question stays.
+  private async typedInterval(messageId: number, text: string): Promise<void> {
+    const problem = intervalProblem(text);
+    if (problem) await this.askInterval(messageId, problem);
+    else await this.saveSetting(messageId, "POLL_INTERVAL", text.trim());
+  }
+
   // Button taps on the settings screens: s (settings), si / si:<value> (interval), sj / sj:- (Jira status).
   private async onSettingsTap(data: string, messageId: number, answer: (text?: string) => Promise<void>): Promise<void> {
     const editable = this.deps.settingsStore !== undefined;
@@ -343,8 +366,7 @@ export class Bot {
     }
     if (data === "si") {
       await answer();
-      const { text, buttons } = intervalScreen(this.settingsView());
-      await this.live.update(messageId, text, buttons);
+      await this.askInterval(messageId);
       return;
     }
     if (data.startsWith("si:")) {

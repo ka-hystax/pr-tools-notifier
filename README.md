@@ -212,7 +212,7 @@ pr-tools-notifier run -p web -p ops:track
 
 ### Settings
 
-Two optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Change them in Telegram with `/settings` (the interval with buttons, the Jira status as a message), edit the file by hand, or use the command:
+Two optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Change them in Telegram with `/settings` (the interval with a preset button or as a message such as `2m`, the Jira status as a message), edit the file by hand, or use the command:
 
 ```
 pr-tools-notifier config                       show the settings and where the file is

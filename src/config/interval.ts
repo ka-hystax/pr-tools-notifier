@@ -16,7 +16,7 @@ export function readInterval(text: string): IntervalResult {
   return { ms };
 }
 
-// The choices the bot offers; any other value can still be typed into settings.env.
+// The bot's buttons; any other value can be sent to the bot or written into settings.env.
 export const INTERVAL_PRESETS = ["1m", "5m", "15m", "30m", "1h", "4h", "12h"];
 
 // 300000 → "5m", 5400000 → "90m", 90000 → "90s": the largest whole unit.

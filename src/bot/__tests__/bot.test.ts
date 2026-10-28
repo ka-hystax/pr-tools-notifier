@@ -565,6 +565,27 @@ describe("settings", () => {
     expect(last(h).text).toContain("✅ Poll interval: 1m (default)");
   });
 
+  test("takes any interval typed as a message, and explains one it cannot save", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("si", id));
+    expect(last(h).text).toContain("send any other as a message: <code>2m</code>");
+
+    await h.bot.handle(h.message("30s", 12));
+    expect(h.api.deleted).toContain(12);
+    expect(last(h).text).toContain("⚠️ <code>30s</code> is under 1m.");
+    expect(h.store.exists()).toBe(false);
+    await h.bot.handle(h.message("soon", 13));
+    expect(last(h).text).toContain("⚠️ <code>soon</code> is not an interval");
+
+    await h.bot.handle(h.message(" 13m ", 14));
+    expect(h.store.load()).toEqual({ intervalMs: 780_000 });
+    expect(last(h).text).toContain("✅ Poll interval: 13m");
+    await h.bot.handle(h.message("2m", 15));
+    expect(h.texts().at(-1)).toMatch(/^🤷 I did not get that/);
+  });
+
   test("ignores an interval that is not a valid one", async () => {
     const h = withSettings();
     await h.bot.handle(h.message("/settings", 11));

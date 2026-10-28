@@ -1,4 +1,11 @@
-import { DEFAULT_INTERVAL_MS, formatInterval, INTERVAL_PRESETS } from "../config/interval.js";
+import {
+  DEFAULT_INTERVAL_MS,
+  formatInterval,
+  INTERVAL_PRESETS,
+  MAX_INTERVAL_MS,
+  MIN_INTERVAL_MS,
+  readInterval,
+} from "../config/interval.js";
 import type { Settings } from "../config/settings.js";
 import { bold, escapeHtml } from "../format/format.js";
 import type { ApiButton } from "../telegram/api.js";
@@ -55,11 +62,23 @@ export function intervalScreen(view: SettingsView): { text: string; buttons: Api
   rows.push([BACK]);
   const text = [
     `⏱ ${bold("Poll interval")}`,
-    "How often to ask GitHub what changed. Shorter is fresher; longer spends fewer API points (every minute is about 7% of the hourly limit).",
+    "How often to ask GitHub what changed. Shorter is fresher; longer spends fewer of the hourly API points.",
+    `Tap one, or send any other as a message: <code>2m</code>, <code>90s</code>, <code>1h</code> (from ${formatInterval(MIN_INTERVAL_MS)} to ${formatInterval(MAX_INTERVAL_MS)}).`,
     "",
     `Now: ${intervalValue(view)}`,
+    ...(view.note ? ["", view.note] : []),
   ].join("\n");
   return { text, buttons: rows };
+}
+
+// Why a typed interval cannot be saved, or null when it can.
+export function intervalProblem(text: string): string | null {
+  const result = readInterval(text);
+  if ("ms" in result) return null;
+  const value = `<code>${escapeHtml(text.trim())}</code>`;
+  if (result.error === "min") return `⚠️ ${value} is under ${formatInterval(MIN_INTERVAL_MS)}.`;
+  if (result.error === "max") return `⚠️ ${value} is over ${formatInterval(MAX_INTERVAL_MS)}.`;
+  return `⚠️ ${value} is not an interval; send a number with s, m or h, like <code>2m</code>.`;
 }
 
 export function statusPrompt(view: SettingsView): { text: string; buttons: ApiButton[][] } {
