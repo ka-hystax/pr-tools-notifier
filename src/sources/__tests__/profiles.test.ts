@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Exec } from "../gh.js";
-import { parseProfileList, ProfileError, resolveProfile } from "../profiles.js";
+import { listProfiles, parseProfileList, ProfileError, resolveProfile } from "../profiles.js";
 
 function fake(stdout: string): { exec: Exec; calls: { file: string; args: string[] }[] } {
   const calls: { file: string; args: string[] }[] = [];
@@ -21,6 +21,12 @@ describe("parseProfileList", () => {
   test("ignores the line gh-pr-tools prints when there are no profiles", () => {
     expect(parseProfileList("(no profiles — run: gh pr-tools init)\n")).toEqual([]);
     expect(parseProfileList("")).toEqual([]);
+  });
+});
+
+describe("listProfiles", () => {
+  test("returns every profile", async () => {
+    expect(await listProfiles({ exec: fake("a\nb (cwd)\n").exec })).toEqual(["a", "b"]);
   });
 });
 

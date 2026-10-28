@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { parseSnapshot, type TrackSnapshot } from "../../contract/snapshot.js";
 import { parseRef } from "../../config/tracked.js";
 import { readFixture } from "../../__tests__/fixtures.js";
-import { isDone, renderTracked, shownPrs } from "../tracked.js";
+import { isDone, renderTracked, renderTrackedParts, shownPrs } from "../tracked.js";
 
 const snapshot = parseSnapshot(readFixture("track")) as TrackSnapshot;
 const now = new Date(Date.parse(snapshot.generatedAt) + 60_000);
@@ -33,6 +33,22 @@ describe("renderTracked", () => {
     const old = { ...snapshot };
     delete old.tickets;
     expect(plain(renderTracked(entries("PRJ-2001"), old, { now })[0]!)).toContain("this gh-pr-tools does not take tickets");
+  });
+
+  test("gives each profile that follows something its own section", () => {
+    const [page] = renderTrackedParts(
+      [
+        { profile: "web", entries: entries("203"), snapshot },
+        { profile: "api", entries: [], snapshot: null },
+        { profile: "ops", entries: entries("OPS-1"), snapshot: null },
+      ],
+      { now, timeZone: "UTC" }
+    );
+    expect(plain(page!).split("\n\n")).toEqual([
+      "📌 Tracked · 2 · 10:00",
+      "🗂 web\n#203 PRJ-1990: rename the settings tab · carol\n🟣 merged 25h ago",
+      "\n🗂 ops\n🎫 OPS-1\n⚠️ not loaded yet",
+    ]);
   });
 
   test("invites to add something when the list is empty", () => {

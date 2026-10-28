@@ -130,6 +130,13 @@ describe("formatEvents", () => {
     expect(message).not.toContain("src/export");
   });
 
+  test("names the repo after the title when a run polls several profiles", () => {
+    expect(fmt([pending()], { repoLabel: true })[0]).toContain("PRJ-1001: add export button · <i>web</i>");
+    expect(fmt([pending({}, { tracked: true, author: "bob" })], { repoLabel: true })[0]).toContain(
+      '📌 <a href="https://github.com/acme/web/pull/101"><b>#101</b></a> PRJ-1001: add export button · bob · <i>web</i>'
+    );
+  });
+
   test("words a pending thread with earlier comments as a reply and shows the comment count", () => {
     expect(fmt([pending({ commentCount: 3 })])[0]).toContain(">replied in a thread</a> · 3 comments");
   });

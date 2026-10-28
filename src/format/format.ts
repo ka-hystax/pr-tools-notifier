@@ -26,6 +26,8 @@ export interface FormatOptions {
   previousAt?: string;
   now?: string;
   timeZone?: string;
+  // Name the repo next to each PR, for a run that polls several profiles.
+  repoLabel?: boolean;
 }
 
 interface Line {
@@ -110,9 +112,10 @@ export function names(authors: string[]): string {
 }
 
 // A tracked PR is someone else's: marked, and with its author.
-function header(pr: PrRef): string {
+function header(pr: PrRef, repoLabel = false): string {
   const head = `${link(pr.url, bold(`#${pr.number}`))} ${escapeHtml(clip(pr.title, TITLE_MAX))}`;
-  return pr.tracked ? `📌 ${head} · ${escapeHtml(pr.author)}` : head;
+  const repo = repoLabel ? ` · ${italic(pr.repo.split("/").at(-1)!)}` : "";
+  return pr.tracked ? `📌 ${head} · ${escapeHtml(pr.author)}${repo}` : `${head}${repo}`;
 }
 
 function quote(excerpt: string): string {
@@ -405,7 +408,7 @@ export function formatEvents(events: NotifyEvent[], options: FormatOptions = {})
   let size = lead.length;
   for (const group of groups.values()) {
     const pr = group[0]!.pr;
-    const head = header(pr);
+    const head = header(pr, options.repoLabel);
     for (const line of lines(group)) {
       const last = current.at(-1);
       const continuing = last !== undefined && last.pr.repo === pr.repo && last.pr.number === pr.number;

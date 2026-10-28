@@ -2,7 +2,7 @@ import type { TrackPullRequest, TrackSnapshot, TrackTicket } from "../contract/s
 import { entryLabel, type TrackedEntry } from "../config/tracked.js";
 import { trackedPassed } from "../diff/diff.js";
 import { approvalCount, bold, clip, escapeHtml, italic, link, names } from "../format/format.js";
-import { ago, earliest, paginate, plural, time } from "./views.js";
+import { ago, earliest, paginate, plural, profileHeading, time } from "./views.js";
 
 const TITLE_MAX = 60;
 
@@ -10,6 +10,13 @@ export interface TrackedOptions {
   now: Date;
   timeZone?: string;
   note?: string;
+}
+
+// One profile's list and its last poll; the profile is named when a run polls several.
+export interface TrackedPart {
+  profile?: string;
+  entries: TrackedEntry[];
+  snapshot: TrackSnapshot | null;
 }
 
 // What a ticket shows: its open PRs, else the last one merged. A PR closed without merging was replaced or dropped.
@@ -93,17 +100,32 @@ function section(entry: TrackedEntry, snapshot: TrackSnapshot | null, options: T
 
 // One message text per page of the tracked list. The snapshot may be missing (never polled, and fetching failed).
 export function renderTracked(entries: TrackedEntry[], snapshot: TrackSnapshot | null, options: TrackedOptions): string[] {
+  return renderTrackedParts([{ entries, snapshot }], options);
+}
+
+// The same for several profiles, one section each; a profile that follows nothing is left out.
+export function renderTrackedParts(parts: TrackedPart[], options: TrackedOptions): string[] {
   const heading = bold("📌 Tracked");
   const note = options.note ? `\n\n${options.note}` : "";
-  if (entries.length === 0) {
+  const total = parts.reduce((sum, part) => sum + part.entries.length, 0);
+  if (total === 0) {
     return [
       `${heading}\n\n📭 Nothing tracked yet. Send ${bold("/track")} with PR numbers or Jira tickets, for example <code>/track PRJ-1824 1281</code>, or tap ➕.${note}`,
     ];
   }
-  const when = snapshot ? ` · ${time(new Date(snapshot.generatedAt), options.timeZone)}` : "";
-  const pages = paginate(entries.map((entry) => ({ text: section(entry, snapshot, options) })));
+  const generatedAt = parts.flatMap((p) => (p.snapshot ? [p.snapshot.generatedAt] : [])).sort()[0];
+  const when = generatedAt ? ` · ${time(new Date(generatedAt), options.timeZone)}` : "";
+  const lines = parts.flatMap((part) =>
+    part.entries.map((entry, i) => ({ profile: part.profile, first: i === 0, text: section(entry, part.snapshot, options) }))
+  );
+  const pages = paginate(lines);
   return pages.map((page, i) => {
     const paging = pages.length > 1 ? ` · ${i + 1}/${pages.length}` : "";
-    return `${heading} · ${entries.length}${when}${paging}\n\n${page.map((l) => l.text).join("\n\n")}${note}`;
+    const body = page.map((line, j) => {
+      if (line.profile === undefined || !(line.first || j === 0)) return line.text;
+      const head = `${profileHeading(line.profile)}${line.first ? "" : ` ${italic("(continued)")}`}`;
+      return `${j > 0 ? "\n" : ""}${head}\n${line.text}`;
+    });
+    return `${heading} · ${total}${when}${paging}\n\n${body.join("\n\n")}${note}`;
   });
 }

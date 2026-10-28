@@ -7,3 +7,12 @@ export function createLogger(): Logger {
   };
   return { info: (m) => line("", m), warn: (m) => line("warn: ", m), error: (m) => line("error: ", m) };
 }
+
+// Each line names its profile, for a run that polls several.
+export function prefixed(log: Logger, prefix: string): Logger {
+  return {
+    info: (m) => log.info(`${prefix}: ${m}`),
+    warn: (m) => log.warn(`${prefix}: ${m}`),
+    error: (m) => log.error(`${prefix}: ${m}`),
+  };
+}

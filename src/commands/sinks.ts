@@ -21,6 +21,17 @@ export function telegramSink(config: ConfigStore, signal?: AbortSignal): Sink | 
   return telegramBot(config, signal)?.sink ?? null;
 }
 
+// The profiles of one run share the chat: one delivery at a time keeps Telegram's pace and the order.
+export function serialSink(sink: Sink): Sink {
+  let queue: Promise<unknown> = Promise.resolve();
+  const next = <T>(task: () => Promise<T>): Promise<T> => {
+    const done = queue.then(task, task);
+    queue = done.catch(() => undefined);
+    return done;
+  };
+  return { deliver: (messages) => next(() => sink.deliver(messages)), alert: (html) => next(() => sink.alert(html)) };
+}
+
 export type BotCheck = { status: "ok" } | { status: "rejected" | "unreachable"; problem: string };
 
 // "rejected" means Telegram refuses the token; a network failure or a 5xx is only "unreachable".

@@ -16,10 +16,18 @@ export interface ListOptions {
 
 // A list is two blocks under bold headers; the icons in a row are the ones notifications use.
 interface Block {
-  title: string;
+  title?: string; // absent: no header, only the empty text
   rows: Row[];
   // Shown under the header when there are no rows; without it an empty block is left out.
   empty?: string;
+  // The profile it belongs to, when a run polls several.
+  profile?: string;
+}
+
+// One profile's part of a list; the profile is named when a run polls several.
+export interface ListPart {
+  profile?: string;
+  snapshot: MineSnapshot | TodoSnapshot;
 }
 
 interface Row {
@@ -194,6 +202,11 @@ function todoBlocks(snapshot: TodoSnapshot, options: ListOptions): Block[] {
   ];
 }
 
+// The header of a profile's section, in a run that polls several.
+export function profileHeading(profile: string): string {
+  return `🗂 ${bold(profile)}`;
+}
+
 export function time(date: Date, timeZone?: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
 }
@@ -231,14 +244,20 @@ export function paginate<L extends { text: string }>(all: L[]): L[][] {
 }
 
 // A block starts under its bold header, two empty lines below the previous block; a block that goes on from the
-// previous page says so.
+// previous page says so. A profile's blocks follow its heading.
 function renderPage(page: Line[], blocks: Block[]): string {
   const parts: string[] = [];
+  let profile: string | undefined;
   page.forEach((line, i) => {
-    if (line.first || i === 0) {
-      const block = blocks[line.block]!;
+    const block = blocks[line.block]!;
+    const heading = block.profile !== undefined && (i === 0 || block.profile !== profile);
+    if (heading) {
+      parts.push(`${parts.length > 0 ? "\n" : ""}${profileHeading(block.profile!)}`);
+      profile = block.profile;
+    }
+    if ((line.first || i === 0) && block.title !== undefined) {
       const header = bold(`${block.title} · ${block.rows.length}`);
-      const gap = parts.length > 0 ? "\n" : "";
+      const gap = parts.length > 0 && !heading ? "\n" : "";
       parts.push(`${gap}${line.first ? header : `${header} ${italic("(continued)")}`}`);
     }
     parts.push(line.text);
@@ -246,25 +265,38 @@ function renderPage(page: Line[], blocks: Block[]): string {
   return parts.join("\n\n");
 }
 
-// One message text per page of `mine` or `todo`, from a snapshot (the saved one or a fresh one).
-export function renderList(snapshot: MineSnapshot | TodoSnapshot, options: ListOptions): string[] {
-  const blocks = (snapshot.command === "mine" ? mineBlocks(snapshot, options) : todoBlocks(snapshot, options)).filter(
+function blocksOf(snapshot: MineSnapshot | TodoSnapshot, options: ListOptions): Block[] {
+  return (snapshot.command === "mine" ? mineBlocks(snapshot, options) : todoBlocks(snapshot, options)).filter(
     (b) => b.rows.length > 0 || b.empty !== undefined
   );
-  const title = snapshot.command === "mine" ? "📤 Mine" : "📥 Todo";
-  const asOf = time(new Date(snapshot.generatedAt), options.timeZone);
-  const age = options.now.getTime() - Date.parse(snapshot.generatedAt);
-  const when = age < 90_000 ? `${asOf}` : `as of ${asOf} (${ago(snapshot.generatedAt, options.now)} ago)`;
+}
+
+// One message text per page of `mine` or `todo`, from a snapshot (the saved one or a fresh one).
+export function renderList(snapshot: MineSnapshot | TodoSnapshot, options: ListOptions): string[] {
+  return renderLists([{ snapshot }], options);
+}
+
+// The same for several profiles, one section each; the oldest snapshot dates the list.
+export function renderLists(parts: ListPart[], options: ListOptions): string[] {
+  const command = parts[0]!.snapshot.command;
+  const nothing = command === "mine" ? "No open PRs of yours." : "Nothing waits for your review.";
+  const blocks = parts.flatMap((part): Block[] =>
+    part.snapshot.prs.length === 0
+      ? [{ rows: [], empty: nothing, ...(part.profile !== undefined ? { profile: part.profile } : {}) }]
+      : blocksOf(part.snapshot, options).map((b) => (part.profile !== undefined ? { ...b, profile: part.profile } : b))
+  );
+  const total = parts.reduce((sum, part) => sum + part.snapshot.prs.length, 0);
+  const generatedAt = parts.map((p) => p.snapshot.generatedAt).sort()[0]!;
+  const title = command === "mine" ? "📤 Mine" : "📥 Todo";
+  const asOf = time(new Date(generatedAt), options.timeZone);
+  const age = options.now.getTime() - Date.parse(generatedAt);
+  const when = age < 90_000 ? `${asOf}` : `as of ${asOf} (${ago(generatedAt, options.now)} ago)`;
   const note = options.note ? `\n\n${options.note}` : "";
 
-  if (snapshot.prs.length === 0) {
-    return [
-      `${bold(title)} · ${when}\n\n📭 ${snapshot.command === "mine" ? "No open PRs of yours." : "Nothing waits for your review."}${note}`,
-    ];
-  }
+  if (total === 0) return [`${bold(title)} · ${when}\n\n📭 ${nothing}${note}`];
   const pages = paginate(lines(blocks));
   return pages.map((page, i) => {
-    const count = plural(snapshot.prs.length, "PR");
+    const count = plural(total, "PR");
     const paging = pages.length > 1 ? ` · ${i + 1}/${pages.length}` : "";
     return `${bold(title)} · ${count} · ${when}${paging}\n\n${renderPage(page, blocks)}${note}`;
   });

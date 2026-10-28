@@ -40,11 +40,13 @@ export interface LoopDeps {
   now?: () => Date;
   sleep?: Sleep;
   timeZone?: string;
+  // Polls track alone, so a track error is a setup mistake like any other.
+  trackOnly?: boolean;
 }
 
 // Resolves to whether the last tick succeeded; a tick cut short by the abort signal is not counted.
 export async function runLoop(deps: LoopDeps): Promise<boolean> {
-  const { tick, sink, monitor, log, once, signal, timeZone } = deps;
+  const { tick, sink, monitor, log, once, signal, timeZone, trackOnly = false } = deps;
   const interval = typeof deps.intervalMs === "function" ? deps.intervalMs : () => deps.intervalMs as number;
   const now = deps.now ?? (() => new Date());
   const wait = deps.sleep ?? sleep;
@@ -62,7 +64,7 @@ export async function runLoop(deps: LoopDeps): Promise<boolean> {
     if (signal.aborted) break;
 
     // Following other people's PRs is extra: a gh-pr-tools too old for it must not stop mine and todo.
-    const errors = result.errors.filter((e) => !e.startsWith("track: "));
+    const errors = trackOnly ? result.errors : result.errors.filter((e) => !e.startsWith("track: "));
     const setup =
       first && errors.length > 0 ? SETUP_ERRORS.find(([pattern]) => errors.every((e) => pattern.test(e))) : undefined;
     if (setup) {

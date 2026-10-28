@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { ghSource, type Exec, type ExecOptions } from "../gh.js";
+import { existsSync, readFileSync } from "node:fs";
+import { ghSource, ghTrackProbe, type Exec, type ExecOptions } from "../gh.js";
 import { readFixtureText } from "../../__tests__/fixtures.js";
 
 const mineJson = readFixtureText("mine");
@@ -150,6 +151,28 @@ describe("ghSource", () => {
   test("rejects a snapshot of the wrong command", async () => {
     await expect(ghSource({ profile: "w", exec: fake(todoJson).exec })("mine")).rejects.toThrow(
       /expected a mine snapshot, got todo/
+    );
+  });
+});
+
+describe("ghTrackProbe", () => {
+  test("asks track about the references through a list file of its own, then removes it", async () => {
+    let list = "";
+    let path = "";
+    const exec: Exec = async (_file, args) => {
+      path = args.at(-1)!;
+      list = readFileSync(path, "utf8");
+      return { stdout: readFixtureText("track"), stderr: "gh pr-tools track: 'XYZ-1' is not a PR number … — skipped" };
+    };
+    const snapshot = await ghTrackProbe({ profile: "work", exec })(["PRJ-2001", "XYZ-1"]);
+    expect(snapshot.command).toBe("track");
+    expect(list).toBe("PRJ-2001\nXYZ-1\n");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("rejects a snapshot of another command", async () => {
+    await expect(ghTrackProbe({ profile: "w", exec: fake(mineJson).exec })(["1"])).rejects.toThrow(
+      /expected a track snapshot, got mine/
     );
   });
 });

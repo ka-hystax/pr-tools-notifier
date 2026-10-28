@@ -8,7 +8,7 @@ export type TrackedEntry = { kind: "pr"; number: number; text: string } | { kind
 
 const PROFILE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const TICKET = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
-const PR_LINK = /[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/(\d+)/;
+const PR_LINK = /([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)\/pull\/(\d+)/;
 const MAX_PR = 2_147_483_647;
 const HEADER = `# PRs and Jira tickets pr-tools-notifier follows, one per line: 1281, a PR link, PRJ-1824 or a Jira link.
 # A ticket stands for every PR whose title names it. "#" starts a comment, except in "#1281".
@@ -34,11 +34,17 @@ export function parseRef(input: string): TrackedEntry | null {
   }
   const link = /^https?:\/\//i.test(text) ? PR_LINK.exec(text) : null;
   if (link) {
-    const number = Number(link[1]);
+    const number = Number(link[2]);
     return number > 0 && number <= MAX_PR ? { kind: "pr", number, text } : null;
   }
   const key = ticketOf(bare);
   return key ? { kind: "ticket", key, text: key } : null;
+}
+
+// The owner/repo a PR link names, lower-cased; null for a PR number or a ticket.
+export function linkRepo(entry: TrackedEntry): string | null {
+  if (entry.kind !== "pr" || !/^https?:\/\//i.test(entry.text)) return null;
+  return PR_LINK.exec(entry.text)?.[1]?.toLowerCase() ?? null;
 }
 
 export function sameEntry(a: TrackedEntry, b: TrackedEntry): boolean {

@@ -70,7 +70,7 @@ You get one sample of every notification kind, with the quiet ones arriving sile
 pr-tools-notifier run
 ```
 
-With one gh-pr-tools profile that is all; with several, say which: `run -p PROFILE`. Keep it in a terminal tab or tmux. The first poll only records the current state (`first run, saved N PRs as the baseline`), so you are not flooded with old PRs.
+It polls every gh-pr-tools profile you have; to poll only some, name them with `-p` (see [Several repos](#several-repos)). Keep it in a terminal tab or tmux. The first poll only records the current state (`first run, saved N PRs as the baseline`), so you are not flooded with old PRs.
 
 ### Asking the bot
 
@@ -81,7 +81,7 @@ While `run` is going, the bot also answers you. It has buttons under the input f
 | `/todo`     | PRs where you are a reviewer: 🔔 your turn (review requests, replies in your threads), then ⏳ waiting for authors |
 | `/mine`     | your open PRs: ✅ approved (ready, or one fix away), then 👀 in review                                             |
 | `/tracked`  | the PRs and Jira tickets you follow; `/track PRJ-1824 1281` adds, `/untrack` removes                               |
-| `/status`   | the profile, the last poll and the settings                                                                        |
+| `/status`   | the profiles, the last polls and the settings                                                                      |
 | `/settings` | view and change the poll interval and the Jira merge status                                                        |
 | `/help`     | what the bot can do (`/start` shows it too)                                                                        |
 
@@ -116,7 +116,7 @@ A list comes from the last poll when that is under two minutes old, otherwise fr
 
 The bot keeps one answer on screen: asking for something else, or pressing `✖ Close`, takes the previous answer and your own command message down, so the chat holds notifications and the latest view, never old lists. Notifications are not deleted, and neither is the help message that holds the buttons, since Telegram removes a keyboard together with its message; `/help` brings a fresh one to the bottom.
 
-Only the chat you connected is heard; messages from anyone else are ignored (the terminal says so once). A command older than two minutes, for example one sent while the laptop slept, is dropped instead of answered late. Only one `run` reads the bot's messages (`state/bot.lock`); another `run` for a different profile still sends its notifications.
+Only the chat you connected is heard; messages from anyone else are ignored (the terminal says so once). A command older than two minutes, for example one sent while the laptop slept, is dropped instead of answered late. Only one `run` reads the bot's messages (`state/bot.lock`); a second `run` still sends its notifications, but one `run` for all your profiles is simpler.
 
 ### Waiting for Jira (optional)
 
@@ -176,6 +176,38 @@ Notifications about a followed PR say whose it is (`📌 #1273 … · alice`). W
 
 The list is a plain file, `~/.config/pr-tools-notifier/tracked/<profile>.txt`, one reference per line (`#` starts a comment), the format of gh-pr-tools' `track --list`. It is read again on every poll, so an edit by hand applies on the next one. Tracking needs gh-pr-tools from October 28, 2026 or later (`gh extension upgrade pr-tools`). With an older one, `mine` and `todo` keep working, but every poll of the list fails, and after three in a row the `⚠️` message says to update. While the list is empty, nothing is polled for it.
 
+### Several repos
+
+One gh-pr-tools profile covers one repo. With several, a single `run` polls them all, each on its own schedule of the same interval. Name them to choose, and add `:LIST` to poll only some commands for a profile, for example only the PRs you follow in another team's repo:
+
+```bash
+pr-tools-notifier run -p web -p ops:track
+```
+
+Each notification then names the repo after the title (`#412 Rotate the backup keys · dave · ops`), a failure alert names its profile, and every terminal line starts with it. In the bot, `/mine`, `/todo` and `/tracked` show a section per profile that polls them (`🗂 ops`), and `/status` lists each profile.
+
+`/track` finds the profile of what it adds:
+
+- a PR link goes to the profile of its repo;
+- a ticket goes where gh-pr-tools finds PRs naming it; with none yet, to the profile whose Jira prefix takes it (each profile is asked once, which takes a few seconds);
+- a PR number, or a ticket that fits several profiles, is asked about, with a button per profile (and `All of them` for a ticket with PRs in several repos).
+
+`/untrack` takes a ticket off every list that has it; a PR number that two lists name is asked about. In the terminal, `pr-tools-notifier track` needs `-p PROFILE` once there are several profiles.
+
+```
+📌 Tracked · 2 · 15:49
+
+🗂 web
+#1290 Faster CSV export · bob
+🔄 changes requested by carol · 1/2 · 4d
+
+
+🗂 ops
+🎫 OPS-31 · In Review
+#412 Rotate the backup keys · dave
+⏳ needs approvals · 0/2 · 2d
+```
+
 ### Settings
 
 Two optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Change them in Telegram with `/settings` (the interval with buttons, the Jira status as a message), edit the file by hand, or use the command:
@@ -203,9 +235,10 @@ pr-tools-notifier config [set|unset]   show or change the settings (Jira merge s
 pr-tools-notifier reset [-y]            remove the saved token, settings and state (asks first; -y skips the question)
 pr-tools-notifier send-test             send sample notifications
 pr-tools-notifier track [add|rm REF...] show or change the PRs and Jira tickets you follow (-p PROFILE)
-pr-tools-notifier run [-p PROFILE]      poll, notify and answer the bot's commands
+pr-tools-notifier run [-p PROFILE]...   poll, notify and answer the bot's commands
 
-  -p, --profile NAME        gh-pr-tools profile (default: the only one)
+  -p, --profile NAME[:LIST] gh-pr-tools profile to poll, repeat for several (default: all of them);
+                            LIST polls only those commands for it, e.g. -p ops:track
       --interval 1m         time between polls: 90s, 5m, 1h (1m to 12h; overrides POLL_INTERVAL)
       --commands LIST       mine,todo,track (default: all; track only polls a non-empty list)
       --once                poll once and exit
@@ -219,10 +252,10 @@ pr-tools-notifier run [-p PROFILE]      poll, notify and answer the bot's comman
 
 - **Closed laptop.** The process sleeps with the machine. On wake it polls once and sends the changes in one message headed `🌅 Since HH:MM — N events`. It reports the net change, so something opened and resolved in between is not mentioned.
 - **Delivery.** The baseline moves only after Telegram accepted the messages, so a failed send repeats the same events on the next poll. Telegram `429` and `5xx` are retried.
-- **Failures.** After three polls in a row fail (an expired `gh` login, no network, a deleted profile), one `⚠️ Notifications are failing` message arrives. It explains the common causes in plain words (no connection to GitHub, a timeout, a rate limit, a `gh` login that expired, a missing profile, a gh-pr-tools too old for `--json`, Telegram refusing the bot) with what to check; anything else is shown as the raw error. The terminal always keeps the raw error. Another follows only after a successful poll.
+- **Failures.** After three polls in a row fail (an expired `gh` login, no network, a deleted profile), one `⚠️ Notifications are failing` message arrives. It explains the common causes in plain words (no connection to GitHub, a timeout, a rate limit, a `gh` login that expired, a missing profile, a gh-pr-tools too old for `--json`, Telegram refusing the bot) with what to check; anything else is shown as the raw error. The terminal always keeps the raw error. Another follows only after a successful poll. With several profiles, each counts its own failures and the message names it.
 - **Merge state `unknown`.** GitHub sometimes answers "unknown" while it recomputes whether a PR merges cleanly. The notifier keeps the last real answer for the same commit instead of guessing, so a PR with conflicts is not announced as ready. With no earlier answer, an approval says `GitHub is still checking whether the branch can be merged`.
 - **Jira status.** A status that cannot be read for a moment (a failed lookup) keeps the last real one for the same ticket, in `mine` and `track`. The ticket moving back out of the merge status says `⏳ Review passed` again. The merge status applies to `mine` only; `todo` and `track` are not affected.
-- **Load.** One poll costs about 6 GitHub GraphQL points for `mine` and `todo` together, and a few more for a non-empty tracked list. At the default 1-minute interval that is about 7% of the 5000-point hourly limit; a longer `POLL_INTERVAL` lowers it.
+- **Load.** One poll costs about 6 GitHub GraphQL points for `mine` and `todo` of one profile together, and a few more for a non-empty tracked list. At the default 1-minute interval that is about 7% of the 5000-point hourly limit; a longer `POLL_INTERVAL` lowers it.
 - **Format changes.** A state file written by another version is set aside as `*.corrupt` and the next poll starts a fresh baseline silently.
 
 ## Where things are stored
@@ -243,7 +276,7 @@ The key sits next to the token, so the token stays out of backups, synced dotfil
 ## Maintenance
 
 - **Changing your gh-pr-tools profile.** It is read on every poll, so changes apply without a restart. A different `REPO` or a new profile name starts a fresh baseline silently (state files of an old name stay in `state/`). A lower approval threshold can produce a 🎉 or 🚧 for PRs that now count as approved. A different GitHub username announces its pending review requests once.
-- **Deleted profile or logged-out `gh`.** A profile name that does not exist, or a gh-pr-tools too old for `--json`, stops `run` at once when it shows up on the first poll. Later, every poll fails. After three, one `⚠️` message arrives with the reason and what to check (for example `gh pr-tools profile list`); then Telegram stays quiet until a poll succeeds, while the terminal keeps logging each failure. The state is kept, so restoring the profile for the same repo continues where it stopped.
+- **Deleted profile or logged-out `gh`.** A profile name that does not exist, or a gh-pr-tools too old for `--json`, stops `run` at once when it shows up on the first poll, together with the other profiles it polls. Later, every poll fails. After three, one `⚠️` message arrives with the reason and what to check (for example `gh pr-tools profile list`); then Telegram stays quiet until a poll succeeds, while the terminal keeps logging each failure. The state is kept, so restoring the profile for the same repo continues where it stopped.
 - **Dead bot.** `pr-tools-notifier status` checks the token against Telegram. `run` does the same at start and stops with `getMe: 401 …` if Telegram rejects it. A token that dies later, or a bot you blocked, shows up in the terminal as `delivery: … 401` or `403` (Telegram cannot carry that alert). The events are kept and arrive after the fix: unblock the bot and press Start, or, for a deleted or revoked bot, stop `run`, run `pr-tools-notifier init` with a new token and start `run` again.
 - **Removing everything.** Check what exists with `pr-tools-notifier status` (bot, last poll per profile, whether a `run` is active). `pr-tools-notifier reset` deletes `~/.config/pr-tools-notifier/` after asking (`-y` skips the question) and refuses while `run` is active. gh-pr-tools settings are not touched. The bot stays in Telegram until you send `/deletebot` (or `/revoke` for the token only) to @BotFather. To drop the command too, run `npm unlink -g pr-tools-notifier` (pnpm: `pnpm remove -g pr-tools-notifier`) and delete the clone.
 - **Starting from scratch**, for a demo or a clean install: `reset` (it drops your settings too), then `init`, `send-test` and `run`. If you share your screen, the token is visible in the BotFather chat, so revoke it afterwards.

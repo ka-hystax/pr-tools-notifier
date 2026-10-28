@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { parseSnapshot, type MineSnapshot, type Review, type Thread, type TodoSnapshot } from "../../contract/snapshot.js";
 import { readFixture } from "../../__tests__/fixtures.js";
 import { MAX_MESSAGE_LENGTH } from "../../format/format.js";
-import { ago, renderList } from "../views.js";
+import { ago, renderList, renderLists } from "../views.js";
 
 const mine = parseSnapshot(readFixture("mine")) as MineSnapshot;
 const todo = parseSnapshot(readFixture("todo")) as TodoSnapshot;
@@ -305,6 +305,51 @@ describe("todo: the two blocks", () => {
 
   test("says when nothing waits for you", () => {
     expect(renderList({ ...todo, prs: [] }, options)).toEqual(["<b>📥 Todo</b> · 10:00\n\n📭 Nothing waits for your review."]);
+  });
+});
+
+describe("several profiles", () => {
+  test("give each profile a section under one header that counts every PR", () => {
+    const [page] = renderLists(
+      [
+        { profile: "web", snapshot: { ...mine, prs: [approved({ title: "Add CSV export" })] } },
+        { profile: "api", snapshot: { ...mine, prs: [] } },
+      ],
+      options
+    );
+    expect(plain(page!).split("\n\n")).toEqual([
+      "📤 Mine · 1 PR · 10:00",
+      "🗂 web",
+      "✅ Approved · 1",
+      expect.stringMatching(/^#\d+ Add CSV export\n🟢 ready to merge/),
+      "\n🗂 api",
+      "No open PRs of yours.",
+    ]);
+  });
+
+  test("dates the list by the oldest snapshot", () => {
+    const older = { ...todo, generatedAt: new Date(NOW.getTime() - 20 * 60_000).toISOString() };
+    const [page] = renderLists(
+      [
+        { profile: "web", snapshot: todo },
+        { profile: "api", snapshot: older },
+      ],
+      options
+    );
+    expect(plain(page!)).toMatch(/^📥 Todo · 4 PRs · as of 09:40 \(20m ago\)/);
+  });
+
+  test("say so once when nothing is anywhere", () => {
+    const empty = { ...mine, prs: [] };
+    expect(
+      renderLists(
+        [
+          { profile: "web", snapshot: empty },
+          { profile: "api", snapshot: empty },
+        ],
+        options
+      )
+    ).toEqual(["<b>📤 Mine</b> · 10:00\n\n📭 No open PRs of yours."]);
   });
 });
 

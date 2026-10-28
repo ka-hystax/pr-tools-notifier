@@ -1,11 +1,35 @@
 import { describe, expect, test } from "vitest";
 import { TelegramError } from "../../telegram/api.js";
-import { checkBot } from "../sinks.js";
+import type { OutMessage } from "../../format/format.js";
+import type { Sink } from "../../runner/types.js";
+import { checkBot, serialSink } from "../sinks.js";
 
 const failing = (err: Error) => ({
   getMe: async () => {
     throw err;
   },
+});
+
+describe("serialSink", () => {
+  test("delivers one batch at a time, in the order asked, and a failure does not block the next", async () => {
+    const log: string[] = [];
+    const slow: Sink = {
+      async deliver(messages) {
+        log.push(`start ${messages[0]!.text}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (messages[0]!.text === "b") throw new Error("down");
+        log.push(`end ${messages[0]!.text}`);
+      },
+      async alert(html) {
+        log.push(`alert ${html}`);
+      },
+    };
+    const sink = serialSink(slow);
+    const batch = (text: string): OutMessage[] => [{ text, buttons: [], silent: false }];
+    const results = await Promise.allSettled([sink.deliver(batch("a")), sink.deliver(batch("b")), sink.alert("c")]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected", "fulfilled"]);
+    expect(log).toEqual(["start a", "end a", "start b", "alert c"]);
+  });
 });
 
 describe("checkBot", () => {

@@ -109,6 +109,18 @@ describe("runLoop", () => {
     expect(h.ticks()).toBe(3);
   });
 
+  test("stops when a profile that polls track alone cannot", async () => {
+    const old: TickResult = {
+      ok: false,
+      errors: ["track: exited with 1: gh pr-tools track: unknown option '--json'"],
+      events: 0,
+      messages: 0,
+    };
+    const h = harness([old, ok], { trackOnly: true });
+    expect(await runLoop(h.deps)).toBe(false);
+    expect(h.ticks()).toBe(1);
+  });
+
   test("keeps going when the first-tick errors name different setup problems", async () => {
     const mixed: TickResult = {
       ...unknown,

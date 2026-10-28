@@ -19,16 +19,13 @@ export function parseProfileList(output: string): string[] {
     .map((line) => line.split(/\s+/)[0]!);
 }
 
-// The profile to poll: the one named, or the only one there is.
-export async function resolveProfile({
-  profile,
+// Every gh-pr-tools profile, by name.
+export async function listProfiles({
   prToolsPath,
   signal,
   exec = defaultExec,
   timeoutMs = 30_000,
-}: ProfileOptions): Promise<string> {
-  if (profile) return profile;
-
+}: Omit<ProfileOptions, "profile">): Promise<string[]> {
   const file = prToolsPath ?? "gh";
   const args = [...(prToolsPath ? [] : ["pr-tools"]), "profile", "list"];
   let stdout: string;
@@ -44,9 +41,15 @@ export async function resolveProfile({
       `could not list the gh-pr-tools profiles (${describeFailure(err, file, timeoutMs)}); name one with -p`
     );
   }
-
   const names = parseProfileList(stdout);
-  if (names.length === 1) return names[0]!;
   if (names.length === 0) throw new ProfileError("there is no gh-pr-tools profile yet: run `gh pr-tools init`, then try again");
+  return names;
+}
+
+// The profile to use: the one named, or the only one there is.
+export async function resolveProfile({ profile, ...options }: ProfileOptions): Promise<string> {
+  if (profile) return profile;
+  const names = await listProfiles(options);
+  if (names.length === 1) return names[0]!;
   throw new ProfileError(`there are several gh-pr-tools profiles (${names.join(", ")}): choose one with -p NAME`);
 }

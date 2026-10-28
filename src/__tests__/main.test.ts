@@ -148,6 +148,27 @@ describe("main", () => {
     expect(r.err).toContain("stopping: this gh-pr-tools is too old for the Jira merge status");
   });
 
+  test("polls only the commands named for a profile", async () => {
+    const r = await cli("run", "-p", "a", "-p", "b:todo", "--dry-run", "--once", "--pr-tools", snapshotsStub());
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("profile b: todo, one poll, dry run");
+    const state = join(configDir(), "state", "dry-run");
+    expect(existsSync(join(state, "a-mine.json"))).toBe(true);
+    expect(existsSync(join(state, "b-todo.json"))).toBe(true);
+    expect(existsSync(join(state, "b-mine.json"))).toBe(false);
+  });
+
+  test("a setup mistake in one profile stops the polling of all of them", async () => {
+    writeFileSync(join(root, "mine.json"), readFixtureText("mine"));
+    writeFileSync(join(root, "todo.json"), readFixtureText("todo"));
+    const stub = fakePrTools(
+      `[ "$2" = b ] && { echo "gh pr-tools: unknown profile 'b'" >&2; exit 1; }\ncase "$3" in mine) cat "${root}/mine.json";; todo) cat "${root}/todo.json";; esac`
+    );
+    const r = await cli("run", "-p", "a", "-p", "b", "--dry-run", "--pr-tools", stub);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("b: stopping: that gh-pr-tools profile does not exist");
+  });
+
   describe("without -p", () => {
     // The stub answers `profile list` with the given text, and the snapshots otherwise.
     const stub = (profiles: string) => {
@@ -165,10 +186,14 @@ describe("main", () => {
       expect(existsSync(join(configDir(), "state", "dry-run", "demo-mine.json"))).toBe(true);
     });
 
-    test("asks for a choice when there are several", async () => {
-      const r = await cli("run", "--dry-run", "--once", "--pr-tools", stub("a\nb"));
-      expect(r.code).toBe(1);
-      expect(r.err).toContain("there are several gh-pr-tools profiles (a, b): choose one with -p NAME");
+    test("polls every profile when there are several, each log line naming its profile", async () => {
+      const r = await cli("run", "--dry-run", "--once", "--pr-tools", stub("a\nb (cwd)"));
+      expect(r.code).toBe(0);
+      expect(r.err).toContain("profile a (found with `gh pr-tools profile list`): mine + todo + track");
+      expect(r.err).toMatch(/b: mine: first run, saved \d+ PRs as the baseline/);
+      for (const name of ["a", "b"]) {
+        expect(existsSync(join(configDir(), "state", "dry-run", `${name}-mine.json`))).toBe(true);
+      }
     });
 
     test("sends to init when there is none", async () => {

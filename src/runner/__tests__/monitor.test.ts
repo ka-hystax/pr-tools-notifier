@@ -26,6 +26,12 @@ describe("FailureMonitor", () => {
     expect(alert).toContain("gh auth status");
   });
 
+  test("names the profile, for a run that polls several", () => {
+    const monitor = new FailureMonitor(1, "other");
+    monitor.record(bad(), at("10:00"));
+    expect(monitor.pendingAlert("UTC")).toMatch(/^⚠️ <b>Notifications are failing<\/b> for <b>other<\/b> since 10:00/);
+  });
+
   test("explains a failure it recognises instead of printing the raw error", () => {
     const monitor = new FailureMonitor(1);
     monitor.record(

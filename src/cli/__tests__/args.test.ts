@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseCli, parseCommands, parseInterval, UsageError } from "../args.js";
+import { parseCli, parseCommands, parseInterval, parseProfiles, UsageError } from "../args.js";
 
 describe("parseInterval", () => {
   test.each([
@@ -38,12 +38,46 @@ describe("parseCommands", () => {
   });
 });
 
+describe("parseProfiles", () => {
+  test("reads names, each with its own commands or those of --commands", () => {
+    expect(parseProfiles(["work", "other:track", "third: mine , todo"])).toEqual([
+      { name: "work" },
+      { name: "other", commands: ["track"] },
+      { name: "third", commands: ["mine", "todo"] },
+    ]);
+  });
+
+  test.each([
+    [["a", "a:track"], /profile 'a' is named twice/],
+    [[":track"], /no profile name in -p ':track'/],
+    [["a:prd"], /unknown command 'prd' in -p a:prd/],
+    [["a:"], /unknown command '' in -p a:/],
+  ])("rejects %j", (values, message) => {
+    expect(() => parseProfiles(values)).toThrow(message);
+  });
+});
+
 describe("parseCli", () => {
   test("applies the defaults", () => {
     expect(parseCli(["run", "-p", "work"])).toEqual({
       kind: "run",
-      config: { profile: "work", dryRun: false, once: false, commands: ["mine", "todo", "track"] },
+      config: { profiles: [{ name: "work" }], dryRun: false, once: false, commands: ["mine", "todo", "track"] },
     });
+  });
+
+  test("takes several profiles, some with their own commands", () => {
+    expect(parseCli(["run", "-p", "work", "--profile", "other:track", "--commands", "mine,todo"])).toMatchObject({
+      config: { profiles: [{ name: "work" }, { name: "other", commands: ["track"] }], commands: ["mine", "todo"] },
+    });
+  });
+
+  test("track takes one profile", () => {
+    expect(parseCli(["track", "-p", "work", "add", "12"])).toEqual({
+      kind: "track",
+      action: { type: "add", refs: ["12"] },
+      profile: "work",
+    });
+    expect(() => parseCli(["track", "-p", "a", "-p", "b"])).toThrow(/track takes one -p PROFILE/);
   });
 
   test("reads every option", () => {
@@ -63,7 +97,7 @@ describe("parseCli", () => {
     expect(parsed).toEqual({
       kind: "run",
       config: {
-        profile: "work",
+        profiles: [{ name: "work" }],
         dryRun: true,
         once: true,
         intervalMs: 120_000,
@@ -132,10 +166,10 @@ describe("parseCli", () => {
     expect(() => parseCli(["run", "-p", "x", "-y"])).toThrow(/only for reset/);
   });
 
-  test("leaves the profile open when it is not named: the only one is used", () => {
+  test("leaves the profiles open when none is named: every one is polled", () => {
     expect(parseCli(["run"])).toEqual({
       kind: "run",
-      config: { dryRun: false, once: false, commands: ["mine", "todo", "track"] },
+      config: { profiles: [], dryRun: false, once: false, commands: ["mine", "todo", "track"] },
     });
   });
 

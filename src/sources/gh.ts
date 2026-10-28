@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
-import { parseSnapshot } from "../contract/snapshot.js";
+import { parseSnapshot, type TrackSnapshot } from "../contract/snapshot.js";
 import { errorMessage, type SnapshotSource } from "../runner/types.js";
 
 export interface ExecOptions {
@@ -44,39 +47,37 @@ export function describeFailure(err: unknown, file: string, timeoutMs: number): 
   return `exited with ${e.code ?? "an error"}${tail ? `: ${tail}` : ""}`;
 }
 
-// Runs `gh pr-tools -p PROFILE <command> --json` (or a checkout's entry script) and validates the document.
-export function ghSource({
-  profile,
-  prToolsPath,
-  signal,
-  timeoutMs = 120_000,
-  exec = defaultExec,
-  jiraRequired = false,
-  onWarning,
-  track,
-}: GhOptions): SnapshotSource {
+// Runs `gh pr-tools -p PROFILE <command> --json [args]` (or a checkout's entry script) and returns the document.
+async function runJson(
+  { profile, prToolsPath, signal, timeoutMs = 120_000, exec = defaultExec, onWarning }: GhOptions,
+  command: string,
+  args: string[]
+): Promise<unknown> {
   const file = prToolsPath ?? "gh";
   const prefix = prToolsPath ? [] : ["pr-tools"];
+  const options: ExecOptions = { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: "utf8" };
+  if (signal) options.signal = signal;
+
+  let stdout: string;
+  let stderr: string;
+  try {
+    ({ stdout, stderr } = await exec(file, [...prefix, "-p", profile, command, "--json", ...args], options));
+  } catch (err) {
+    throw new Error(describeFailure(err, file, timeoutMs));
+  }
+  for (const line of stderr.split("\n")) if (line.trim() !== "") onWarning?.(line.trim());
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("output is not valid JSON");
+  }
+}
+
+// Validated snapshots of `gh pr-tools -p PROFILE <command> --json`.
+export function ghSource(options: GhOptions): SnapshotSource {
+  const { jiraRequired = false, track } = options;
   return async (command) => {
-    const options: ExecOptions = { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: "utf8" };
-    if (signal) options.signal = signal;
-
-    let stdout: string;
-    let stderr: string;
-    try {
-      const list = command === "track" && track ? ["--list", track.listPath] : [];
-      ({ stdout, stderr } = await exec(file, [...prefix, "-p", profile, command, "--json", ...list], options));
-    } catch (err) {
-      throw new Error(describeFailure(err, file, timeoutMs));
-    }
-    for (const line of stderr.split("\n")) if (line.trim() !== "") onWarning?.(line.trim());
-
-    let raw: unknown;
-    try {
-      raw = JSON.parse(stdout);
-    } catch {
-      throw new Error("output is not valid JSON");
-    }
+    const raw = await runJson(options, command, command === "track" && track ? ["--list", track.listPath] : []);
     try {
       const snapshot = parseSnapshot(raw);
       if (snapshot.command !== command) throw new Error(`expected a ${command} snapshot, got ${snapshot.command}`);
@@ -90,6 +91,22 @@ export function ghSource({
       return snapshot;
     } catch (err) {
       throw new Error(errorMessage(err));
+    }
+  };
+}
+
+// Asks `track` about references without following them; one the profile cannot take is left out of the answer.
+export function ghTrackProbe(options: Omit<GhOptions, "onWarning" | "track" | "jiraRequired">) {
+  return async (refs: string[]): Promise<TrackSnapshot> => {
+    const dir = mkdtempSync(join(tmpdir(), "prn-probe-"));
+    try {
+      const list = join(dir, "list.txt");
+      writeFileSync(list, `${refs.join("\n")}\n`);
+      const snapshot = parseSnapshot(await runJson(options, "track", ["--list", list]));
+      if (snapshot.command !== "track") throw new Error(`expected a track snapshot, got ${snapshot.command}`);
+      return snapshot;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   };
 }

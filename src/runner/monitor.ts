@@ -13,7 +13,11 @@ export class FailureMonitor {
   private lastError = "";
   private alerted = false;
 
-  constructor(private readonly threshold = 3) {}
+  // The profile is named in the alert when a run polls several.
+  constructor(
+    private readonly threshold = 3,
+    private readonly profile?: string
+  ) {}
 
   record(result: TickResult, at: Date): void {
     if (result.ok) {
@@ -36,7 +40,8 @@ export class FailureMonitor {
     const explained = explainFailure(this.lastError);
     const error = this.lastError.length > ERROR_MAX ? `${this.lastError.slice(0, ERROR_MAX - 1)}…` : this.lastError;
     const detail = explained ? `${explained.summary}\n${explained.hint}` : `<code>${escapeHtml(error)}</code>\n${GENERIC_HINT}`;
-    return `⚠️ <b>Notifications are failing</b> since ${time} (${this.failures} attempts in a row)\n${detail}`;
+    const what = this.profile ? ` for <b>${escapeHtml(this.profile)}</b>` : "";
+    return `⚠️ <b>Notifications are failing</b>${what} since ${time} (${this.failures} attempts in a row)\n${detail}`;
   }
 
   markAlerted(): void {

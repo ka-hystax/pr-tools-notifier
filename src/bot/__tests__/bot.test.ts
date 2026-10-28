@@ -13,7 +13,7 @@ import { readFixture } from "../../__tests__/fixtures.js";
 import type { Command, Logger, SnapshotSource } from "../../runner/types.js";
 import { StateStore } from "../../state/store.js";
 import { TelegramError, type BotCommand, type EditParams, type SendParams, type Update } from "../../telegram/api.js";
-import { Bot, BOT_COMMANDS, commandArgs, KEYBOARD, parseAction, type BotDeps } from "../bot.js";
+import { Bot, BOT_COMMANDS, commandArgs, KEYBOARD, parseAction, type BotDeps, type BotProfile } from "../bot.js";
 import { BotStateStore } from "../state.js";
 import { SettingsStore } from "../../config/settings.js";
 import { TrackedList } from "../../config/tracked.js";
@@ -84,7 +84,9 @@ class FakeApi implements BotApi {
   }
 }
 
-function harness(over: Partial<BotDeps> = {}, options: { saved?: Partial<Record<Command, Snapshot>>; ageMs?: number } = {}) {
+type HarnessDeps = Partial<BotDeps> & { commands?: Command[]; tracked?: TrackedList };
+
+function harness(over: HarnessDeps = {}, options: { saved?: Partial<Record<Command, Snapshot>>; ageMs?: number } = {}) {
   const controller = new AbortController();
   const api = new FakeApi(controller.signal);
   const logs: string[] = [];
@@ -114,13 +116,11 @@ function harness(over: Partial<BotDeps> = {}, options: { saved?: Partial<Record<
   };
   let clock = GENERATED + (options.ageMs ?? 30_000);
   const state = new BotStateStore(root);
+  const { commands = ["mine", "todo"], tracked, ...deps } = over;
   const bot = new Bot({
     api,
     chatId: CHAT,
-    profile: "work",
-    commands: ["mine", "todo"],
-    source,
-    stores,
+    profiles: [{ profile: "work", commands, source, stores, ...(tracked ? { tracked } : {}) }],
     state,
     log,
     signal: controller.signal,
@@ -128,7 +128,7 @@ function harness(over: Partial<BotDeps> = {}, options: { saved?: Partial<Record<
     timeZone: "UTC",
     now: () => new Date(clock),
     pollSeconds: 1,
-    ...over,
+    ...deps,
   });
   const message = (text: string, id = 1, over: { chat?: number; date?: number } = {}): Update => ({
     update_id: id,
@@ -657,7 +657,7 @@ describe("settings", () => {
 });
 
 describe("tracking", () => {
-  function withTracked(over: Partial<BotDeps> = {}, saved?: Partial<Record<Command, Snapshot>>) {
+  function withTracked(over: HarnessDeps = {}, saved?: Partial<Record<Command, Snapshot>>) {
     const tracked = new TrackedList(root, "work");
     const h = harness({ commands: ["mine", "todo", "track"], tracked, ...over }, saved ? { saved } : {});
     return { ...h, tracked, file: () => tracked.read().entries.map((e) => e.text) };
@@ -757,5 +757,182 @@ describe("tracking", () => {
     h.tracked.add(["PRJ-2001", "203"]);
     await h.bot.handle(h.message("/status", 11));
     expect(h.api.sent[0]!.params.text).toContain("📌 tracked: 2 entries, polled 0m ago");
+  });
+});
+
+describe("several profiles", () => {
+  const last = (h: ReturnType<typeof harness>) => h.api.edits.at(-1)!;
+  // What `track` answers about a list in this repo: the tickets it takes, each with the PRs it found.
+  const answer =
+    (repo: string, tickets: Record<string, number[]> = {}) =>
+    async (): Promise<TrackSnapshot> => ({
+      ...structuredClone(track),
+      repo,
+      prs: [],
+      tickets: Object.entries(tickets).map(([key, prs]) => ({ key, url: null, status: null, prs })),
+    });
+
+  // "web" polls everything, "ops" only follows PRs; their saved polls are recent.
+  function twoProfiles(probes: { web?: BotProfile["probe"]; ops?: BotProfile["probe"] } = {}) {
+    const make = (name: "web" | "ops", commands: Command[]) => {
+      const repo = `acme/${name}`;
+      const stores = {
+        mine: new StateStore(root, name, "mine"),
+        todo: new StateStore(root, name, "todo"),
+        track: new StateStore(root, name, "track"),
+      };
+      const fresh = { mine: { ...mine, repo }, todo: { ...todo, repo }, track: { ...track, repo } };
+      for (const kind of commands) stores[kind].save({ snapshot: fresh[kind], missingTicks: {} });
+      const fetched: Command[] = [];
+      const profile: BotProfile = {
+        profile: name,
+        commands,
+        stores,
+        tracked: new TrackedList(root, name),
+        source: async (kind) => {
+          fetched.push(kind);
+          return structuredClone(fresh[kind]);
+        },
+        probe: probes[name] ?? answer(repo),
+      };
+      return { profile, fetched, list: () => profile.tracked!.read().entries.map((e) => e.text) };
+    };
+    const web = make("web", ["mine", "todo", "track"]);
+    const ops = make("ops", ["track"]);
+    return { ...harness({ profiles: [web.profile, ops.profile] }), web, ops };
+  }
+
+  test("a list only one profile polls has no profile headings", async () => {
+    const h = twoProfiles();
+    await h.bot.handle(h.message("/mine", 11));
+    expect(h.texts()[0]).toContain("📤 Mine");
+    expect(h.texts()[0]).not.toContain("🗂");
+  });
+
+  test("/tracked shows a section for each profile that follows something", async () => {
+    const h = twoProfiles();
+    h.web.profile.tracked!.add(["PRJ-2001"]);
+    h.ops.profile.tracked!.add(["203"]);
+    await h.bot.handle(h.message("/tracked", 11));
+    const text = h.texts()[0]!;
+    expect(text).toContain("📌 Tracked</b> · 2");
+    expect(text.indexOf("🗂 <b>web</b>")).toBeLessThan(text.indexOf("🗂 <b>ops</b>"));
+    expect(h.web.fetched).toEqual([]);
+  });
+
+  test("/track puts a ticket where gh-pr-tools finds its PRs", async () => {
+    const h = twoProfiles({ web: answer("acme/web"), ops: answer("acme/ops", { "OPS-1": [301] }) });
+    await h.bot.handle(h.message("/track OPS-1", 11));
+    expect(h.ops.list()).toEqual(["OPS-1"]);
+    expect(h.web.list()).toEqual([]);
+    expect(last(h).text).toContain("✔️ Following OPS-1 in ops");
+    expect(h.ops.fetched).toEqual(["track"]);
+    expect(h.logs).toContain("info: tracking OPS-1 in ops from Telegram");
+  });
+
+  test("a ticket with no PR yet goes to the one profile that takes it", async () => {
+    const h = twoProfiles({ web: answer("acme/web", { "PRJ-9": [] }) });
+    await h.bot.handle(h.message("/track PRJ-9", 11));
+    expect(h.web.list()).toEqual(["PRJ-9"]);
+  });
+
+  test("a ticket no profile takes is reported, and nothing is added", async () => {
+    const h = twoProfiles();
+    await h.bot.handle(h.message("/track XYZ-1 nope", 11));
+    expect(last(h).text).toContain("⚠️ <b>XYZ-1</b>: no profile takes this ticket (another Jira prefix?)");
+    expect(last(h).text).toContain("⚠️ Not a PR or a Jira ticket: nope");
+    expect(h.web.list()).toEqual([]);
+    expect(h.ops.list()).toEqual([]);
+  });
+
+  test("a PR link goes to the profile of its repo", async () => {
+    const h = twoProfiles();
+    await h.bot.handle(h.message("/track https://github.com/ACME/ops/pull/5/files", 11));
+    expect(h.ops.list()).toEqual(["https://github.com/ACME/ops/pull/5/files"]);
+    expect(h.web.list()).toEqual([]);
+  });
+
+  test("a profile that cannot be asked is named, and the others still answer", async () => {
+    const down = async (): Promise<TrackSnapshot> => {
+      throw new Error("timed out after 120s");
+    };
+    const h = twoProfiles({ web: down, ops: answer("acme/ops", { "OPS-1": [301] }) });
+    await h.bot.handle(h.message("/track OPS-1", 11));
+    expect(h.ops.list()).toEqual(["OPS-1"]);
+    expect(last(h).text).toContain("⚠️ Could not ask web: timed out after 120s");
+  });
+
+  test("a PR number is asked about, one at a time, and Skip leaves it out", async () => {
+    const h = twoProfiles();
+    await h.bot.handle(h.message("/track 1281 1282", 11));
+    const id = h.api.sent[0]!.id;
+    expect(last(h).text).toBe("➕ Which profile is <b>#1281</b> in?");
+    expect(buttonData(last(h))).toEqual(["tq:0", "tq:1", "tq:-", "x"]);
+    await h.bot.handle(h.tap("tq:-", id));
+    expect(last(h).text).toBe("➕ Which profile is <b>#1282</b> in?");
+    await h.bot.handle(h.tap("tq:1", id));
+    expect(h.ops.list()).toEqual(["1282"]);
+    expect(h.web.list()).toEqual([]);
+    expect(last(h).text).toContain("✔️ Following #1282 in ops");
+  });
+
+  test("a ticket with PRs in two repos can be followed in both", async () => {
+    const both = { "PRJ-7": [1] };
+    const h = twoProfiles({ web: answer("acme/web", both), ops: answer("acme/ops", both) });
+    await h.bot.handle(h.message("/track PRJ-7", 11));
+    expect(last(h).text).toBe("➕ <b>PRJ-7</b> has PRs in several repos. Follow it in:");
+    expect(buttonData(last(h))).toEqual(["tq:0", "tq:1", "tq:*", "tq:-", "x"]);
+    await h.bot.handle(h.tap("tq:*", h.api.sent[0]!.id));
+    expect(h.web.list()).toEqual(["PRJ-7"]);
+    expect(h.ops.list()).toEqual(["PRJ-7"]);
+  });
+
+  test("another command drops the question", async () => {
+    const h = twoProfiles();
+    await h.bot.handle(h.message("/track 1281", 11));
+    await h.bot.handle(h.message("/tracked", 12));
+    await h.bot.handle(h.tap("tq:0", h.api.sent.at(-1)!.id));
+    expect(h.web.list()).toEqual([]);
+  });
+
+  test("/untrack takes a ticket off every list and asks about a number two lists name", async () => {
+    const h = twoProfiles();
+    h.web.profile.tracked!.add(["PRJ-7", "12"]);
+    h.ops.profile.tracked!.add(["PRJ-7", "12"]);
+    await h.bot.handle(h.message("/untrack PRJ-7 12", 11));
+    expect(h.web.list()).toEqual(["12"]);
+    expect(h.ops.list()).toEqual(["12"]);
+    expect(last(h).text).toContain("➖ <b>#12</b> is followed in several profiles. Stop following it in:");
+    expect(last(h).text).toContain("✔️ No longer following PRJ-7 in web\n✔️ No longer following PRJ-7 in ops");
+    await h.bot.handle(h.tap("tq:1", h.api.sent[0]!.id));
+    expect(h.web.list()).toEqual(["12"]);
+    expect(h.ops.list()).toEqual([]);
+  });
+
+  test("➖ names the profile of a label two lists share, and removes it from that one", async () => {
+    const h = twoProfiles();
+    h.web.profile.tracked!.add(["12", "PRJ-1"]);
+    h.ops.profile.tracked!.add(["12"]);
+    await h.bot.handle(h.message("/untrack", 11));
+    const sent = h.api.sent[0]!;
+    expect((sent.params.buttons ?? []).flat().map((b) => b.text)).toEqual([
+      "✖ #12 · web",
+      "✖ PRJ-1",
+      "✖ #12 · ops",
+      "‹ Back",
+      "✖ Close",
+    ]);
+    expect(buttonData(sent.params)).toEqual(["tr:0:#12", "tr:0:PRJ-1", "tr:1:#12", "tv", "x"]);
+    await h.bot.handle(h.tap("tr:1:#12", sent.id));
+    expect(h.web.list()).toEqual(["12", "PRJ-1"]);
+    expect(h.ops.list()).toEqual([]);
+  });
+
+  test("/status lists each profile with what it polls", async () => {
+    const h = twoProfiles();
+    await h.bot.handle(h.message("/status", 11));
+    const text = h.texts()[0]!;
+    expect(text).toMatch(/^ℹ️ <b>Status<\/b>\n🗂 <b>web<\/b>\n📤 mine: 3 PRs/);
+    expect(text).toContain("🗂 <b>ops</b>\n📌 tracked: nothing yet\n⏱ every 5m");
   });
 });

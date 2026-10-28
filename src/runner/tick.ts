@@ -15,6 +15,8 @@ export interface TickDeps {
   mergeStatuses?: string[];
   // Whether the tracked list names anything; track is not polled while it is empty.
   hasTracked?: () => boolean;
+  // Name the repo in each message, for a run that polls several profiles.
+  repoLabel?: boolean;
 }
 
 // Tickets exist but Jira told gh-pr-tools nothing about any of them: no token, or every lookup failed.
@@ -34,6 +36,7 @@ export async function runTick({
   timeZone,
   mergeStatuses,
   hasTracked,
+  repoLabel,
 }: TickDeps): Promise<TickResult> {
   const gate: MergeGate | undefined = mergeStatuses ? { statuses: mergeStatuses } : undefined;
   const errors: string[] = [];
@@ -86,6 +89,7 @@ export async function runTick({
     if (previousAt) options.previousAt = previousAt;
     if (now) options.now = now;
     if (timeZone) options.timeZone = timeZone;
+    if (repoLabel) options.repoLabel = true;
     messages = formatEvents(events, options);
     try {
       await sink.deliver(messages);
