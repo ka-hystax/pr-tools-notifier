@@ -51,11 +51,13 @@ type MergeBlocked = Extract<NotifyEvent, { kind: "merge_blocked" }>;
 type ReviewPassed = Extract<NotifyEvent, { kind: "review_passed" }>;
 type TicketInMerge = Extract<NotifyEvent, { kind: "ticket_in_merge" }>;
 type ReviewRequested = Extract<NotifyEvent, { kind: "review_requested" }>;
+type ReviewDue = Extract<NotifyEvent, { kind: "review_due" }>;
 type TrackedPassed = Extract<NotifyEvent, { kind: "tracked_passed" }>;
 
 // Most urgent first within a PR.
 const RANK: Record<NotifyEvent["kind"], number> = {
   review_requested: 0,
+  review_due: 0,
   ci_failed: 1,
   review_changes_requested: 2,
   thread_pending: 3,
@@ -174,6 +176,15 @@ function ciLine(event: CiFailed): Line {
 
 function requestedLine(event: ReviewRequested): Line {
   return { text: `🔔 Review requested · PR by ${bold(event.pr.author)}`, url: event.pr.url, events: [event] };
+}
+
+function dueLine(event: ReviewDue): Line {
+  const threads = event.resolved === 1 ? "Your thread is" : `All ${event.resolved} of your threads are`;
+  return {
+    text: `✔️ ${threads} resolved and new commits landed · PR by ${bold(event.pr.author)}`,
+    url: event.pr.url,
+    events: [event],
+  };
 }
 
 function waitingFor(reviewers: string[]): string {
@@ -298,6 +309,8 @@ function standalone(event: NotifyEvent): Line[] {
       return [ciLine(event)];
     case "review_requested":
       return [requestedLine(event)];
+    case "review_due":
+      return [dueLine(event)];
     case "ready_to_merge":
       return [readyLine(event)];
     case "merge_blocked":

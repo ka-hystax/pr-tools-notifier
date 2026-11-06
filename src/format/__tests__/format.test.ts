@@ -51,6 +51,10 @@ function requested(): NotifyEvent {
   return { kind: "review_requested", pr: ref({ author: "alice" }) };
 }
 
+function due(resolved: number): NotifyEvent {
+  return { kind: "review_due", pr: ref({ author: "alice" }), resolved };
+}
+
 function answered(over: Partial<Thread> = {}): ThreadEvent {
   return {
     kind: "thread_answered",
@@ -144,6 +148,8 @@ describe("formatEvents", () => {
   test("renders the other event kinds", () => {
     expect(fmt([changes()])[0]).toContain("🔄 <b>bob</b> requested changes");
     expect(fmt([requested()])[0]).toContain("🔔 Review requested · PR by <b>alice</b>");
+    expect(fmt([due(1)])[0]).toContain("✔️ Your thread is resolved and new commits landed · PR by <b>alice</b>");
+    expect(fmt([due(3)])[0]).toContain("✔️ All 3 of your threads are resolved and new commits landed · ");
     expect(fmt([answered()])[0]).toContain(`↩️ <b>bob</b> <a href="${THREAD_URL}">replied</a> in your thread · 2 comments`);
     expect(fmt([answered()])[0]).toContain("<blockquote>Good catch.</blockquote>");
     expect(fmt([approved()])[0]).toContain("✅ <b>alice</b> approved · 1/2");
@@ -674,8 +680,8 @@ describe("silent delivery", () => {
     expect(silent([approved("carol", stale)])).toBe(false);
   });
 
-  test("is loud for people's threads, replies, change requests and review requests", () => {
-    for (const event of [pending(), answered(), changes(), requested()]) expect(silent([event])).toBe(false);
+  test("is loud for people's threads, replies, change requests, review requests and resolved threads", () => {
+    for (const event of [pending(), answered(), changes(), requested(), due(1)]) expect(silent([event])).toBe(false);
   });
 
   test("is loud when any event in the message is loud", () => {

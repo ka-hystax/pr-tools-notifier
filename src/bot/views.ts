@@ -1,5 +1,5 @@
-import type { MineSnapshot, Review, Thread, TodoSnapshot } from "../contract/snapshot.js";
-import { holdFor, type MergeGate } from "../diff/diff.js";
+import type { MineSnapshot, Thread, TodoSnapshot } from "../contract/snapshot.js";
+import { holdFor, reviewDue, viewerReviews, type MergeGate } from "../diff/diff.js";
 import { approvalCount, bold, clip, escapeHtml, italic, link, names } from "../format/format.js";
 
 const TITLE_MAX = 60;
@@ -149,10 +149,7 @@ function mineBlocks(snapshot: MineSnapshot, options: ListOptions): Block[] {
 
 // The viewer's latest submitted verdict on a PR, and whether commits landed after it.
 function myVerdict(pr: TodoPr, viewer: string): string | null {
-  const mine = pr.reviews
-    .filter((r): r is Review & { submittedAt: string } => r.author === viewer && r.submittedAt !== null)
-    .filter((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED")
-    .sort((a, b) => (a.submittedAt < b.submittedAt ? -1 : 1));
+  const mine = viewerReviews(pr, viewer);
   // A comment after an approval does not take the approval back.
   const last = mine.filter((r) => r.state !== "COMMENTED").at(-1) ?? mine.at(-1);
   if (!last) return null;
@@ -182,8 +179,12 @@ function todoBlocks(snapshot: TodoSnapshot, options: ListOptions): Block[] {
         `↩️ ${link(earliest(replies)?.url ?? pr.url, `${plural(replies.length, "reply", "replies")} in your threads`)}`
       );
     }
+    const resolved = reviewDue(pr, snapshot.viewer);
+    if (yours.length === 0 && resolved > 0) {
+      yours.push(`✔️ ${resolved === 1 ? "your thread" : `all ${resolved} of your threads`} resolved, new commits since`);
+    }
     if (yours.length > 0) {
-      turn.push(row(pr, pr.requestedFromMe ? 0 : 1, [...yours, ...info]));
+      turn.push(row(pr, pr.requestedFromMe ? 0 : replies.length > 0 ? 1 : 2, [...yours, ...info]));
       continue;
     }
     const items: string[] = [];

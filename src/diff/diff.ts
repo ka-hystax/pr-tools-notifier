@@ -48,6 +48,7 @@ export type NotifyEvent =
   | { kind: "review_approved"; pr: PrRef; review: Review; approval: Approval; status: MergeStatus }
   | { kind: "review_changes_requested"; pr: PrRef; review: Review; approval: Approval }
   | { kind: "review_requested"; pr: PrRef }
+  | { kind: "review_due"; pr: PrRef; resolved: number } // resolved: the viewer's threads, all of them resolved
   | { kind: "thread_answered"; pr: PrRef; thread: Thread }
   | { kind: "ci_failed"; pr: PrRef; failedJobs: string[] }
   | { kind: "ready_to_merge"; pr: PrRef; approval: Approval; ticket?: JiraTicket } // ticket: already in the merge status
@@ -196,6 +197,27 @@ function mineEvents(ctx: Ctx, before: MinePullRequest | undefined, now: MinePull
   return events;
 }
 
+// The viewer's submitted reviews on a PR, oldest first.
+export function viewerReviews(pr: TodoPullRequest, viewer: string): (Review & { submittedAt: string })[] {
+  return pr.reviews
+    .filter((r): r is Review & { submittedAt: string } => r.author === viewer && r.submittedAt !== null)
+    .filter((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED")
+    .sort((a, b) => compareText(a.submittedAt, b.submittedAt));
+}
+
+// The author dealt with the viewer's review without asking for it again: every thread the viewer opened is resolved
+// and commits landed after the viewer's last review. An approval that still stands leaves nothing to do.
+// A truncated thread list may hide an open thread, so it never counts.
+export function reviewDue(pr: TodoPullRequest, viewer: string, threads: Thread[] | null = pr.threads): number {
+  if (pr.isDraft || pr.threadsTruncated || !threads) return 0;
+  const mine = threads.filter((t) => t.opener === viewer);
+  if (mine.length === 0 || mine.some((t) => t.state !== "resolved")) return 0;
+  const reviews = viewerReviews(pr, viewer);
+  if (reviews.filter((r) => r.state !== "COMMENTED").at(-1)?.state === "APPROVED") return 0;
+  const last = reviews.at(-1);
+  return last && last.commitOid !== null && last.commitOid !== pr.headOid ? mine.length : 0;
+}
+
 function todoEvents(ctx: Ctx, before: TodoPullRequest | undefined, now: TodoPullRequest): NotifyEvent[] {
   if (now.isDraft) return [];
   const pr = prRef(ctx, now);
@@ -203,6 +225,11 @@ function todoEvents(ctx: Ctx, before: TodoPullRequest | undefined, now: TodoPull
   // A request seen while the PR was a draft was never announced.
   const alreadyAnnounced = before !== undefined && before.requestedFromMe && !before.isDraft;
   if (now.requestedFromMe && !alreadyAnnounced) events.push({ kind: "review_requested", pr });
+  // A review request already says it is the viewer's turn; a first successful thread lookup only seeds.
+  const resolved = reviewDue(now, ctx.viewer, now.threads ?? before?.threads ?? null);
+  if (before?.threads && !now.requestedFromMe && resolved > 0 && reviewDue(before, ctx.viewer) === 0) {
+    events.push({ kind: "review_due", pr, resolved });
+  }
   for (const thread of enteringState(before?.threads, now.threads, "answered")) {
     if (thread.opener === ctx.viewer && thread.lastAuthor !== ctx.viewer) {
       events.push({ kind: "thread_answered", pr, thread });

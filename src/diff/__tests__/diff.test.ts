@@ -450,6 +450,63 @@ describe("todo", () => {
     });
   });
 
+  describe("review_due", () => {
+    // 202: the viewer commented on the head commit and opened one thread, which bob answered.
+    const resolvedThread = (s: TodoSnapshot) => (find(pr202(s).threads ?? [], "PRRT_kwDOAAAA10").state = "resolved");
+    const pushed = (s: TodoSnapshot) => (pr202(s).headOid = "cccccccccccccccccccccccccccccccccccccccc");
+    const due = todo((s) => {
+      resolvedThread(s);
+      pushed(s);
+    });
+
+    test("announces once when the last thread is resolved after new commits", () => {
+      const { events } = replay(base(todo(pushed)), [due, due]);
+      expect(events.map(summary)).toEqual([["202 review_due"], []]);
+      expect(events[0]?.[0]).toEqual({ kind: "review_due", pr: expect.objectContaining({ number: 202 }), resolved: 1 });
+    });
+
+    test("announces when commits land after the threads were resolved", () => {
+      const { events } = replay(base(todo(resolvedThread)), [due]);
+      expect(events.map(summary)).toEqual([["202 review_due"]]);
+    });
+
+    test("announces again after the viewer reviews and the author pushes once more", () => {
+      const reviewed = todo((s) => {
+        resolvedThread(s);
+        pushed(s);
+        pr202(s).reviews.push(mkReview({ id: "R2", author: "dev-me", state: "COMMENTED", commitOid: pr202(s).headOid }));
+      });
+      const again = todo((s) => {
+        resolvedThread(s);
+        pr202(s).headOid = "dddddddddddddddddddddddddddddddddddddddd";
+        pr202(s).reviews.push(mkReview({ id: "R2", author: "dev-me", state: "COMMENTED", commitOid: "cc".repeat(20) }));
+      });
+      const { events } = replay(base(due), [reviewed, again]);
+      expect(events.map(summary)).toEqual([[], ["202 review_due"]]);
+    });
+
+    test("stays silent without new commits, after an approval, or when the review is requested again", () => {
+      expect(computeEvents(base(todo()), todo(resolvedThread)).events).toEqual([]);
+      const approved = (s: TodoSnapshot) =>
+        pr202(s).reviews.push(mkReview({ id: "R2", author: "dev-me", commitOid: "bb".repeat(20) }));
+      expect(
+        computeEvents(
+          base(todo(approved)),
+          todo((s) => (approved(s), resolvedThread(s), pushed(s)))
+        ).events
+      ).toEqual([]);
+      const requested = todo((s) => (resolvedThread(s), pushed(s), (pr202(s).requestedFromMe = true)));
+      expect(summary(computeEvents(base(todo(pushed)), requested).events)).toEqual(["202 review_requested"]);
+    });
+
+    test("stays silent for a PR new to the baseline, a truncated thread list and the first thread lookup", () => {
+      expect(summary(computeEvents(base(todo((s) => (s.prs = []))), due).events)).toEqual(["201 review_requested"]);
+      const truncated = todo((s) => (resolvedThread(s), pushed(s), (pr202(s).threadsTruncated = true)));
+      expect(computeEvents(base(todo(pushed)), truncated).events).toEqual([]);
+      expect(computeEvents(base(todo((s) => (pr202(s).threads = null))), due).events).toEqual([]);
+    });
+  });
+
   describe("drafts", () => {
     test("never announces review_requested for a draft, new or existing", () => {
       const draftNew = todo((s) => {

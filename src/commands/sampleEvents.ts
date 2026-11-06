@@ -214,6 +214,7 @@ export const SAMPLE_MESSAGES: { label: string; events: NotifyEvent[] }[] = [
     ],
   },
   { label: "review requested", events: [{ kind: "review_requested", pr: P201 }] },
+  { label: "threads resolved, new commits", events: [{ kind: "review_due", pr: P201, resolved: 2 }] },
   { label: "CI failed", events: [{ kind: "ci_failed", pr: P102, failedJobs: ["Build UI / build_image", "e2e (chromium)"] }] },
   followed("a new PR for the ticket", { kind: "tracked_new_pr", pr: T301, ticket: ticket("In Progress", "PRJ-3001") }),
   followed("review passed", { kind: "tracked_passed", pr: T301, approval: twoApprovals, by: ["carol"] }),

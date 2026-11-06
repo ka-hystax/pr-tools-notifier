@@ -20,7 +20,7 @@ Should this be disabled while the request is in flight?
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `mine`  | a new thread waiting for you (bot threads are compact and silent), an approval with the merge verdict, changes requested, CI failed                                            |
 | `mine`  | 🎉 ready to merge, or 🚧 GitHub blocks the merge (for example, waiting for a code-owner team) — when it happens without a new approval                                         |
-| `todo`  | review requested from you, a reply in a thread you started                                                                                                                     |
+| `todo`  | review requested from you, a reply in a thread you started, all your threads resolved with new commits since (the author did not ask again)                                    |
 | `mine`  | with a Jira merge status (see [Waiting for Jira](#waiting-for-jira-optional)): ⏳ review passed, then 🎉 when the ticket reaches that status                                   |
 | `track` | other people's PRs and Jira tickets you follow (see [Following PRs and tickets](#following-prs-and-tickets)): 🆕 a new PR for a ticket, ✅ review passed, 🟣 merged, ✖️ closed |
 
@@ -112,7 +112,7 @@ While `run` is going, the bot also answers you. It has buttons under the input f
                                           [🔄 Refresh] [✖ Close]
 ```
 
-`/mine` puts a PR under **Approved** when it has enough approvals (stale ones count), no open threads, no requested changes, and GitHub is not waiting for a required review. A failed build, conflicts or a waiting Jira ticket keep it there: it is one fix or one wait away. Everything else is **In review**, with what you can answer first. `/todo` puts review requests and replies in your threads under **Your turn**, and the rest under **Waiting for authors** with your own verdict (`✅ you approved, new commits since`). The icons are the ones notifications use: ❌ CI, 🔀 conflicts, 💬 threads, 🔄 requested changes, ⏳ waiting, 🚧 GitHub blocks, 🎫 Jira, 📝 draft.
+`/mine` puts a PR under **Approved** when it has enough approvals (stale ones count), no open threads, no requested changes, and GitHub is not waiting for a required review. A failed build, conflicts or a waiting Jira ticket keep it there: it is one fix or one wait away. Everything else is **In review**, with what you can answer first. `/todo` puts review requests, replies in your threads and PRs whose author resolved all your threads and pushed since your last review (unless you approved) under **Your turn**, and the rest under **Waiting for authors** with your own verdict (`✅ you approved, new commits since`). The icons are the ones notifications use: ❌ CI, 🔀 conflicts, 💬 threads, ✔️ your threads resolved, 🔄 requested changes, ⏳ waiting, 🚧 GitHub blocks, 🎫 Jira, 📝 draft.
 
 A list comes from the last poll when that is under two minutes old, otherwise from a fresh request (a few seconds; if GitHub cannot be reached, the last poll is shown with a note). `🔄 Refresh` asks again without touching what the notifications are compared against. Long lists get `Next ▶` and `◀ Prev`.
 

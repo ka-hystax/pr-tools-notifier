@@ -299,6 +299,42 @@ describe("todo: the two blocks", () => {
     );
   });
 
+  describe("your threads resolved and new commits since", () => {
+    const resolved = (n: number) =>
+      Array.from({ length: n }, (_, i) => thread({ id: `T${i}`, state: "resolved", opener: "dev-me", lastAuthor: "alice" }));
+    const turnLine = (over: Partial<TodoPr>) =>
+      block(render([todoPr({ requestedFromMe: false, ...over })]), "🔔 Your turn")[0]?.split("\n")[1];
+
+    test("is your turn, after review requests and replies", () => {
+      expect(turnLine({ threads: resolved(1), reviews: [review("COMMENTED", "9", "old")] })).toMatch(
+        /^✔️ your thread resolved, new commits since · by alice/
+      );
+      expect(turnLine({ threads: resolved(7), reviews: [review("CHANGES_REQUESTED", "9", "old")] })).toMatch(
+        /^✔️ all 7 of your threads resolved, new commits since · /
+      );
+      const due = todoPr({
+        number: 3,
+        requestedFromMe: false,
+        threads: resolved(1),
+        reviews: [review("COMMENTED", "9", "old")],
+      });
+      const rows = block(render([due, ...todo.prs]), "🔔 Your turn");
+      expect(rows.map((r) => r.split(" ")[0])).toEqual(["#201", "#202", "#3"]);
+    });
+
+    test("waits for the author without new commits, with an open thread, or after your approval", () => {
+      expect(waitingLine({ threads: resolved(1), reviews: [review("COMMENTED", "9")] })).toMatch(/^💬 you commented · /);
+      const open = [...resolved(1), thread({ id: "O", opener: "dev-me", lastAuthor: "dev-me" })];
+      expect(waitingLine({ threads: open, reviews: [review("COMMENTED", "9", "old")] })).toMatch(/^💬 1 of your threads open/);
+      expect(waitingLine({ threads: resolved(1), reviews: [review("APPROVED", "9", "old")] })).toMatch(
+        /^✅ you approved, new commits since · /
+      );
+      expect(waitingLine({ threads: resolved(1), threadsTruncated: true, reviews: [review("COMMENTED", "9", "old")] })).toMatch(
+        /^💬 you commented, new commits since · /
+      );
+    });
+  });
+
   test("a reviewer with nothing submitted yet", () => {
     expect(waitingLine({ reviews: [] })).toMatch(/^👀 you are a reviewer · by alice/);
   });
