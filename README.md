@@ -81,7 +81,7 @@ While `run` is going, the bot also answers you. It has buttons under the input f
 | Command     | Answer                                                                                                             |
 | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | `/todo`     | PRs where you are a reviewer: 🔔 your turn (review requests, replies in your threads), then ⏳ waiting for authors |
-| `/mine`     | your open PRs: ✅ approved (ready, or one fix away), then 👀 in review                                             |
+| `/mine`     | your open PRs: 🔔 your turn (threads, changes, a broken build), ✅ approved (ready, or one fix away), 👀 in review |
 | `/tracked`  | the PRs and Jira tickets you follow; `/track PRJ-1824 1281` adds, `/untrack` removes                               |
 | `/status`   | the profiles, the last polls and the settings                                                                      |
 | `/settings` | view and change the poll interval and the Jira merge status                                                        |
@@ -89,6 +89,12 @@ While `run` is going, the bot also answers you. It has buttons under the input f
 
 ```
 📤 Mine · 5 PRs · 15:49
+
+🔔 Your turn · 1
+
+#1291 PRJ-1826. Cache the model limits…
+💬 2 open threads · ⏳ review from carol · 1/2 · 29h
+
 
 ✅ Approved · 2
 
@@ -99,10 +105,7 @@ While `run` is going, the bot also answers you. It has buttons under the input f
 ❌ CI failed · 🔀 conflicts · 3/2 · 3d
 
 
-👀 In review · 3
-
-#1291 PRJ-1826. Cache the model limits…
-💬 2 open threads · 2/2 · 29h
+👀 In review · 2
 
 #1289 PRJ-1992. Fix the table search…
 ⏳ review from ui, dave · 0/2 · 2d
@@ -112,7 +115,7 @@ While `run` is going, the bot also answers you. It has buttons under the input f
                                           [🔄 Refresh] [✖ Close]
 ```
 
-`/mine` puts a PR under **Approved** when it has enough approvals (stale ones count), no open threads, no requested changes, and GitHub is not waiting for a required review. A failed build, conflicts or a waiting Jira ticket keep it there: it is one fix or one wait away. Everything else is **In review**, with what you can answer first. `/todo` puts review requests, replies in your threads and PRs whose author resolved all your threads and pushed since your last review (unless you approved) under **Your turn**, and the rest under **Waiting for authors** with your own verdict (`✅ you approved, new commits since`). The icons are the ones notifications use: ❌ CI, 🔀 conflicts, 💬 threads, ✔️ your threads resolved, 🔄 requested changes, ⏳ waiting, 🚧 GitHub blocks, 🎫 Jira, 📝 draft.
+`/mine` puts a PR under **Approved** when it has enough approvals (stale ones count), no open threads, no requested changes, and GitHub is not waiting for a required review. A failed build, conflicts or a waiting Jira ticket keep it there: it is one fix or one wait away. Of the rest, a PR with something you can act on (an open thread nobody answered, requested changes, a failed build, conflicts or a branch to rebase) is **Your turn**, shown first and only when there is one; a PR that only waits for reviewers is **In review**. `/todo` puts review requests, replies in your threads and PRs whose author resolved all your threads and pushed since your last review (unless you approved) under **Your turn**, and the rest under **Waiting for authors** with your own verdict (`✅ you approved, new commits since`). The icons are the ones notifications use: ❌ CI, 🔀 conflicts, 💬 threads, ✔️ your threads resolved, 🔄 requested changes, ⏳ waiting, 🚧 GitHub blocks, 🎫 Jira, 📝 draft.
 
 A list comes from the last poll when that is under two minutes old, otherwise from a fresh request (a few seconds; if GitHub cannot be reached, the last poll is shown with a note). `🔄 Refresh` asks again without touching what the notifications are compared against. Long lists get `Next ▶` and `◀ Prev`.
 

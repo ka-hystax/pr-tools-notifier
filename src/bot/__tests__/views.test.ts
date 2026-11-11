@@ -75,14 +75,16 @@ function block(text: string, title: string): string[] {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
-describe("mine: the two blocks", () => {
-  test("the fixture is all in review: changes, threads and a broken build first, a draft last", () => {
+describe("mine: the three blocks", () => {
+  test("the fixture: changes, threads and a broken build are your turn; the rest is in review, a draft last", () => {
     const text = plain(renderList(mine, options)[0]!);
     expect(text).toMatch(
-      /^📤 Mine · 3 PRs · 10:00\n\n✅ Approved · 0\n\nNo PR has enough approvals yet\.\n\n\n👀 In review · 3\n\n/
+      /^📤 Mine · 3 PRs · 10:00\n\n🔔 Your turn · 1\n\n#101 [^\n]+\n[^\n]+\n\n\n✅ Approved · 0\n\nNo PR has enough approvals yet\.\n\n\n👀 In review · 2\n\n/
     );
-    expect(block(text, "👀 In review")).toEqual([
+    expect(block(text, "🔔 Your turn")).toEqual([
       "#101 PRJ-1001: add export button\n🔄 changes requested by bob · 💬 2 open threads · ❌ CI failed · 🔀 conflicts · ⏳ review from backend · 1/2 · 4d",
+    ]);
+    expect(block(text, "👀 In review")).toEqual([
       "#102 PRJ-1002: fix locale fallback\n⏳ needs approvals · 0/2 · 3d",
       "#103 PRJ-1003: migrate settings page\n📝 draft · 1/2 (1 stale) · 2d",
     ]);
@@ -126,9 +128,31 @@ describe("mine: the two blocks", () => {
     expect(html).toContain("<b>✅ Approved · 0</b>\n\n<i>No PR has enough approvals yet.</i>\n\n\n<b>👀 In review · 1</b>");
   });
 
-  test("approved but with open threads goes to In review", () => {
+  test("approved but with open threads is your turn", () => {
     const text = firstPage([approved({ threads: [thread()] })]);
-    expect(block(text, "👀 In review")).toEqual([expect.stringContaining("💬 1 open thread · 2/2")]);
+    expect(block(text, "🔔 Your turn")).toEqual([expect.stringContaining("💬 1 open thread · 2/2")]);
+    expect(text).not.toContain("In review");
+  });
+
+  test("an open thread is your turn even while reviewers are still awaited", () => {
+    const text = firstPage([minePr({ threads: [thread()], pendingReviewers: ["carol"] }), minePr()]);
+    expect(text.indexOf("🔔 Your turn · 1")).toBeLessThan(text.indexOf("✅ Approved · 0"));
+    expect(block(text, "🔔 Your turn")).toEqual([expect.stringContaining("💬 1 open thread · ⏳ review from carol · 0/2")]);
+    expect(block(text, "👀 In review")).toEqual([expect.stringContaining("⏳ needs approvals")]);
+  });
+
+  test("a failed build or a branch that does not merge is your turn; answered and resolved threads are not", () => {
+    const text = firstPage([
+      minePr({ ci: { state: "fail", failedJobs: ["build"] } }),
+      minePr({ mergeState: "dirty" }),
+      minePr({ threads: [thread({ state: "answered" }), thread({ state: "resolved" })] }),
+    ]);
+    expect(block(text, "🔔 Your turn").map((r) => r.split("\n")[1]!.split(" · ")[0])).toEqual(["❌ CI failed", "🔀 conflicts"]);
+    expect(block(text, "👀 In review")).toHaveLength(1);
+  });
+
+  test("an empty Your turn block is left out", () => {
+    expect(firstPage([approved(), minePr()])).not.toContain("Your turn");
   });
 
   test("approved but GitHub waits for a code owner goes to In review", () => {
@@ -146,7 +170,7 @@ describe("mine: the two blocks", () => {
     const pr = approved({
       approval: { ...base.approval, approvers: ["a", "b"], changesRequestedBy: ["bob"], decision: "approved" },
     });
-    expect(block(firstPage([pr]), "👀 In review")).toEqual([expect.stringContaining("🔄 changes requested by bob")]);
+    expect(block(firstPage([pr]), "🔔 Your turn")).toEqual([expect.stringContaining("🔄 changes requested by bob")]);
   });
 
   test("Approved: ready first, then fixes, then CI or GitHub, then the Jira ticket", () => {
@@ -170,19 +194,16 @@ describe("mine: the two blocks", () => {
     ]);
   });
 
-  test("In review: changes, then threads or a broken build, then reviewers, drafts last", () => {
+  test("Your turn: changes, then threads or a broken build; In review: reviewers, drafts last", () => {
     const text = firstPage([
       minePr({ isDraft: true }),
       minePr({ pendingReviewers: ["carol"] }),
       minePr({ threads: [thread()] }),
       minePr({ approval: { ...base.approval, changesRequestedBy: ["bob"] } }),
     ]);
-    expect(block(text, "👀 In review").map((r) => r.split("\n")[1]!.split(" · ")[0])).toEqual([
-      "🔄 changes requested by bob",
-      "💬 1 open thread",
-      "⏳ review from carol",
-      "📝 draft",
-    ]);
+    const firsts = (title: string) => block(text, title).map((r) => r.split("\n")[1]!.split(" · ")[0]);
+    expect(firsts("🔔 Your turn")).toEqual(["🔄 changes requested by bob", "💬 1 open thread"]);
+    expect(firsts("👀 In review")).toEqual(["⏳ review from carol", "📝 draft"]);
   });
 
   test("links the checks and the oldest open thread", () => {

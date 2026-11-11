@@ -14,7 +14,7 @@ export interface ListOptions {
   note?: string;
 }
 
-// A list is two blocks under bold headers; the icons in a row are the ones notifications use.
+// A list is a few blocks under bold headers; the icons in a row are the ones notifications use.
 interface Block {
   title?: string; // absent: no header, only the empty text
   rows: Row[];
@@ -98,8 +98,9 @@ function approvedRow(pr: MinePr, options: ListOptions): Row {
   return row(pr, 0, ["🟢 ready to merge", ...info]);
 }
 
-// In review: what you can answer first (requested changes, open threads, a broken build), then what waits for reviewers.
-function inReviewRow(pr: MinePr, options: ListOptions): Row {
+// Not approved yet. Your turn: something the author can act on (requested changes, open threads, a broken build,
+// a branch that does not merge). In review: only reviewers to wait for, drafts last.
+function unapprovedRow(pr: MinePr, options: ListOptions): { yourTurn: boolean; row: Row } {
   const pending = (pr.threads ?? []).filter((t) => t.state === "pending");
   const changes = pr.approval.changesRequestedBy;
   const yours: string[] = [];
@@ -122,7 +123,7 @@ function inReviewRow(pr: MinePr, options: ListOptions): Row {
   info.push(ago(pr.createdAt, options.now));
 
   const rank = yours.length > 0 ? (changes.length > 0 ? 0 : 1) : pr.isDraft ? 3 : 2;
-  return row(pr, rank, [...yours, ...wait, ...info]);
+  return { yourTurn: yours.length > 0, row: row(pr, rank, [...yours, ...wait, ...info]) };
 }
 
 function isApproved(pr: MinePr): boolean {
@@ -137,13 +138,15 @@ function isApproved(pr: MinePr): boolean {
 }
 
 function mineBlocks(snapshot: MineSnapshot, options: ListOptions): Block[] {
+  const unapproved = snapshot.prs.filter((pr) => !isApproved(pr)).map((pr) => unapprovedRow(pr, options));
   return [
+    { title: "🔔 Your turn", rows: unapproved.filter((u) => u.yourTurn).map((u) => u.row) },
     {
       title: "✅ Approved",
       rows: snapshot.prs.filter(isApproved).map((pr) => approvedRow(pr, options)),
       empty: "No PR has enough approvals yet.",
     },
-    { title: "👀 In review", rows: snapshot.prs.filter((pr) => !isApproved(pr)).map((pr) => inReviewRow(pr, options)) },
+    { title: "👀 In review", rows: unapproved.filter((u) => !u.yourTurn).map((u) => u.row) },
   ];
 }
 
