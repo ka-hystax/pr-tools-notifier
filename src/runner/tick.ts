@@ -44,6 +44,12 @@ export async function runTick({
   const commits: { command: Command; store: StateStore; next: Baseline }[] = [];
   let previousAt: string | undefined;
   let now: string | undefined;
+  // The PRs mine reports on this tick, or at its last good poll when this one failed.
+  let minePrs: ReadonlySet<number> | undefined;
+  const leftToMine = (): ReadonlySet<number> | undefined => {
+    if (!commands.includes("mine")) return undefined;
+    return minePrs ?? new Set(stores.mine.peek()?.snapshot.prs.map((p) => p.number));
+  };
 
   for (const command of commands) {
     try {
@@ -61,10 +67,10 @@ export async function runTick({
           `${command}: no Jira status came back, so "Time to merge" keeps waiting (check the Jira token: \`gh pr-tools profile show\`)`
         );
       }
-      // A tracked PR of the viewer's own is left to mine, which says more about it.
-      const result = computeEvents(baseline, curr, command === "mine" ? gate : undefined, {
-        skipOwn: command === "track" && commands.includes("mine"),
-      });
+      if (curr.command === "mine") minePrs = new Set(curr.prs.map((p) => p.number));
+      // A tracked PR that mine reports on (the viewer's own, or assigned to them) is left to mine, which says more.
+      const skip = command === "track" ? leftToMine() : undefined;
+      const result = computeEvents(baseline, curr, command === "mine" ? gate : undefined, skip ? { leftToMine: skip } : {});
       log.info(
         baseline === null
           ? `${command}: first run, saved ${curr.prs.length} PRs as the baseline`

@@ -24,7 +24,7 @@ function summary(events: NotifyEvent[]): string[] {
   return events.map((e) => `${e.pr.number} ${e.kind}`);
 }
 
-function diff(edit: (s: TrackSnapshot) => void, options: { skipOwn?: boolean } = {}) {
+function diff(edit: (s: TrackSnapshot) => void, options: { leftToMine?: ReadonlySet<number> } = {}) {
   return computeEvents(base(track()), track(edit), undefined, options);
 }
 
@@ -148,8 +148,21 @@ describe("track: a PR's own changes", () => {
       pr(s, 202).author = "dev-me";
       pr(s, 202).state = "merged";
     };
-    expect(diff(edit, { skipOwn: true }).events).toEqual([]);
+    expect(diff(edit, { leftToMine: new Set() }).events).toEqual([]);
     expect(summary(diff(edit).events)).toEqual(["202 tracked_merged"]);
+  });
+
+  test("leaves the PRs mine lists (assigned to the viewer) to mine, a new one on a ticket too", () => {
+    const merged = (s: TrackSnapshot) => {
+      pr(s, 202).state = "merged";
+    };
+    expect(diff(merged, { leftToMine: new Set([202]) }).events).toEqual([]);
+    expect(summary(diff(merged, { leftToMine: new Set([201]) }).events)).toEqual(["202 tracked_merged"]);
+    const added = (s: TrackSnapshot) => {
+      s.prs.push({ ...pr(s, 202), number: 204, url: "https://github.com/acme/web/pull/204", author: "erin" });
+      s.tickets![0]!.prs.push(204);
+    };
+    expect(summary(diff(added, { leftToMine: new Set([204]) }).events)).toEqual([]);
   });
 });
 

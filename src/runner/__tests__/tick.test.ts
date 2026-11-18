@@ -308,4 +308,18 @@ describe("runTick with tracked PRs", () => {
     own.state = "merged";
     expect(await h.tick(["track"], undefined, undefined, () => true)).toMatchObject({ events: 1 });
   });
+
+  test("leaves a tracked PR that mine lists to mine, by its last good poll when this one fails", async () => {
+    const h = setup();
+    const assigned = h.state.track.prs.find((p) => p.number === 202)!;
+    h.state.mine.prs.push({ ...h.state.mine.prs[0]!, number: 202, author: "erin" });
+    await h.tick(["mine", "track"], undefined, undefined, () => true);
+    assigned.state = "merged";
+    expect(await h.tick(["mine", "track"], undefined, undefined, () => true)).toMatchObject({ events: 0 });
+    assigned.state = "open";
+    await h.tick(["mine", "track"], undefined, undefined, () => true);
+    h.failures.source.mine = new Error("down");
+    assigned.state = "merged";
+    expect(await h.tick(["mine", "track"], undefined, undefined, () => true)).toMatchObject({ events: 0 });
+  });
 });

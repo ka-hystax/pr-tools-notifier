@@ -67,8 +67,13 @@ export type NotifyEvent =
 export const MAX_MISSING_TICKS = 3;
 
 type PullRequest = MinePullRequest | TodoPullRequest | TrackPullRequest;
-// skipOwn: the viewer's own PRs are left to mine, which says more about them.
-type Ctx = { repo: string; viewer: string; skipOwn?: boolean };
+// leftToMine: set when mine is polled too. The viewer's own PRs and those mine lists (assigned to the viewer) are
+// left to mine, which says more about them.
+type Ctx = { repo: string; viewer: string; leftToMine?: ReadonlySet<number> };
+
+function isLeftToMine(ctx: Ctx, pr: PullRequest): boolean {
+  return ctx.leftToMine !== undefined && (pr.author === ctx.viewer || ctx.leftToMine.has(pr.number));
+}
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -247,7 +252,7 @@ export function trackedPassed(pr: TrackPullRequest): boolean {
 }
 
 function trackEvents(ctx: Ctx, before: TrackPullRequest | undefined, now: TrackPullRequest): NotifyEvent[] {
-  if (!before || (ctx.skipOwn && now.author === ctx.viewer)) return [];
+  if (!before || isLeftToMine(ctx, now)) return [];
   const pr: PrRef = { ...prRef(ctx, now), tracked: true };
   if (before.state === "open" && now.state !== "open")
     return [{ kind: now.state === "merged" ? "tracked_merged" : "tracked_closed", pr }];
@@ -298,7 +303,7 @@ function ticketEvents(ctx: Ctx, old: Tracked, curr: Tracked): NotifyEvent[] {
     const prev = before.get(ticket.key);
     if (!prev) continue;
     const jira: JiraTicket = { key: ticket.key, url: ticket.url, status: ticket.status };
-    const prs = ticket.prs.flatMap((n) => byNumber.get(n) ?? []).filter((p) => !(ctx.skipOwn && p.author === ctx.viewer));
+    const prs = ticket.prs.flatMap((n) => byNumber.get(n) ?? []).filter((p) => !isLeftToMine(ctx, p));
     for (const p of prs) {
       if (!prev.prs.includes(p.number) && !known.has(p.number) && p.state === "open") {
         events.push({ kind: "tracked_new_pr", pr: ref(p), ticket: jira });
@@ -339,9 +344,9 @@ export function computeEvents(
   prev: Baseline | null,
   curr: Snapshot,
   gate?: MergeGate,
-  { skipOwn = false }: { skipOwn?: boolean } = {}
+  { leftToMine }: { leftToMine?: ReadonlySet<number> } = {}
 ): { events: NotifyEvent[]; next: Baseline } {
-  const ctx: Ctx = { repo: curr.repo, viewer: curr.viewer, skipOwn };
+  const ctx: Ctx = { repo: curr.repo, viewer: curr.viewer, ...(leftToMine ? { leftToMine } : {}) };
   if (prev !== null && prev.snapshot.repo === curr.repo) {
     const old = prev.snapshot;
     if (old.command === "mine" && curr.command === "mine") {

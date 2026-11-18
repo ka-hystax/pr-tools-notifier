@@ -1,5 +1,5 @@
 import { DEFAULT_INTERVAL_MS, formatInterval, readInterval } from "../config/interval.js";
-import type { Settings, SettingsStore } from "../config/settings.js";
+import type { SettingKey, Settings, SettingsStore } from "../config/settings.js";
 import type { MineSnapshot, Snapshot, TodoSnapshot, TrackSnapshot } from "../contract/snapshot.js";
 import { entryLabel, linkRepo, parseRef, sameEntry, type TrackedEntry, type TrackedList } from "../config/tracked.js";
 import { computeEvents, type MergeGate } from "../diff/diff.js";
@@ -315,7 +315,7 @@ export class Bot {
   }
 
   // Writes one setting and shows the settings with what changed, or why it did not.
-  private async saveSetting(messageId: number, key: "MERGE_STATUS" | "POLL_INTERVAL", value: string): Promise<void> {
+  private async saveSetting(messageId: number, key: SettingKey, value: string): Promise<void> {
     let note: string;
     const store = this.deps.settingsStore;
     if (!store) {
@@ -323,10 +323,15 @@ export class Bot {
     } else {
       try {
         const stored = store.set(key, value);
-        note =
+        note = savedNote(
           key === "MERGE_STATUS"
-            ? savedNote(stored ? `Jira merge status: ${stored.split(",").join(", ")}` : "Jira merge status cleared")
-            : savedNote(`Poll interval: ${stored || `${formatInterval(DEFAULT_INTERVAL_MS)} (default)`}`);
+            ? stored
+              ? `Jira merge status: ${stored.split(",").join(", ")}`
+              : "Jira merge status cleared"
+            : key === "INCLUDE_ASSIGNED"
+              ? `PRs assigned to you ${stored === "off" ? "are left out of" : "are listed in"} /mine from the next poll`
+              : `Poll interval: ${stored || `${formatInterval(DEFAULT_INTERVAL_MS)} (default)`}`
+        );
         this.deps.log.info(`settings: ${key} ${stored ? `set to ${stored}` : "cleared"} from Telegram`);
       } catch (err) {
         note = `⚠️ Not saved: ${this.reason(err)}`;
@@ -351,7 +356,8 @@ export class Bot {
     else await this.saveSetting(messageId, "POLL_INTERVAL", text.trim());
   }
 
-  // Button taps on the settings screens: s (settings), si / si:<value> (interval), sj / sj:- (Jira status).
+  // Button taps on the settings screens: s (settings), si / si:<value> (interval), sj / sj:- (Jira status),
+  // sa:on / sa:off (assigned PRs in mine).
   private async onSettingsTap(data: string, messageId: number, answer: (text?: string) => Promise<void>): Promise<void> {
     const editable = this.deps.settingsStore !== undefined;
     if (data === "s") {
@@ -391,6 +397,11 @@ export class Bot {
       await this.saveSetting(messageId, "MERGE_STATUS", "");
       return;
     }
+    if (data === "sa:on" || data === "sa:off") {
+      await answer("Saved");
+      await this.saveSetting(messageId, "INCLUDE_ASSIGNED", data.slice(3));
+      return;
+    }
     await answer();
   }
 
@@ -419,7 +430,7 @@ export class Bot {
       await this.live.close();
       return;
     }
-    if (data === "s" || data.startsWith("si") || data.startsWith("sj")) {
+    if (data === "s" || data.startsWith("si") || data.startsWith("sj") || data.startsWith("sa")) {
       this.shown = null;
       await this.onSettingsTap(data, query.message.message_id, answer);
       return;

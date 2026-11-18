@@ -47,7 +47,7 @@ describe("liveSettings", () => {
     store.set("MERGE_STATUS", "Merge");
     expect(settings()).toEqual({ intervalMs: 300_000, mergeStatuses: ["Merge"] });
     expect(settings()).toEqual({ intervalMs: 300_000, mergeStatuses: ["Merge"] });
-    expect(logs).toEqual(["info: settings changed: poll every 5m, Jira merge status Merge"]);
+    expect(logs).toEqual(["info: settings changed: poll every 5m, Jira merge status Merge, mine with assigned PRs"]);
   });
 
   test("keeps the last good settings when the file is broken by hand, warning once per mistake", () => {

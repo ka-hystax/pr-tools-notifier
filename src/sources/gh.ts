@@ -26,6 +26,8 @@ export interface GhOptions {
   jiraRequired?: boolean | (() => boolean);
   // gh-pr-tools prints a line on stderr when it cannot do something (a rejected Jira token); the exit code stays 0.
   onWarning?: (line: string) => void;
+  // `mine` also lists the PRs assigned to the viewer (`--include-assigned`).
+  includeAssigned?: boolean | (() => boolean);
   // `track` reads its PRs and tickets from this list file; a list naming tickets needs a gh-pr-tools that takes them.
   track?: { listPath: string; hasTickets: () => boolean };
 }
@@ -76,9 +78,14 @@ async function runJson(
 
 // Validated snapshots of `gh pr-tools -p PROFILE <command> --json`.
 export function ghSource(options: GhOptions): SnapshotSource {
-  const { jiraRequired = false, track } = options;
+  const { jiraRequired = false, includeAssigned = false, track } = options;
+  const args = (command: string): string[] => {
+    if (command === "track" && track) return ["--list", track.listPath];
+    const assigned = typeof includeAssigned === "function" ? includeAssigned() : includeAssigned;
+    return command === "mine" && assigned ? ["--include-assigned"] : [];
+  };
   return async (command) => {
-    const raw = await runJson(options, command, command === "track" && track ? ["--list", track.listPath] : []);
+    const raw = await runJson(options, command, args(command));
     try {
       const snapshot = parseSnapshot(raw);
       if (snapshot.command !== command) throw new Error(`expected a ${command} snapshot, got ${snapshot.command}`);

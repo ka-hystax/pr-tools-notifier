@@ -6,7 +6,7 @@ import { createLogger, prefixed } from "../cli/logger.js";
 import type { ConfigStore } from "../config/config.js";
 import { DEFAULT_INTERVAL_MS, formatInterval } from "../config/interval.js";
 import { stateDir } from "../config/paths.js";
-import type { Settings, SettingsStore } from "../config/settings.js";
+import { includesAssigned, type Settings, type SettingsStore } from "../config/settings.js";
 import { TrackedList } from "../config/tracked.js";
 import { DryRunSink } from "../runner/dryRun.js";
 import { runLoop } from "../runner/loop.js";
@@ -26,9 +26,11 @@ export function pollInterval(options: Pick<RunConfig, "intervalMs">, settings: S
   return options.intervalMs ?? settings.intervalMs ?? DEFAULT_INTERVAL_MS;
 }
 
-function describeSettings({ mergeStatuses, intervalMs }: Settings): string {
+function describeSettings(settings: Settings): string {
+  const { mergeStatuses, intervalMs } = settings;
   const merge = mergeStatuses ? `Jira merge status ${mergeStatuses.join(", ")}` : "no Jira merge status";
-  return `poll every ${formatInterval(intervalMs ?? DEFAULT_INTERVAL_MS)}, ${merge}`;
+  const assigned = includesAssigned(settings) ? "mine with assigned PRs" : "mine without assigned PRs";
+  return `poll every ${formatInterval(intervalMs ?? DEFAULT_INTERVAL_MS)}, ${merge}, ${assigned}`;
 }
 
 // Re-read on every use, so `config set` and the bot's /settings apply without a restart.
@@ -154,6 +156,7 @@ export async function runCommand(options: RunConfig, config: ConfigStore, settin
         },
         ...(prToolsPath ? { prToolsPath } : {}),
         jiraRequired: () => mergeStatuses() !== undefined,
+        includeAssigned: () => includesAssigned(settings()),
         track: { listPath: profile.tracked.path, hasTickets: () => trackedEntries().some((e) => e.kind === "ticket") },
       });
       const probe = ghTrackProbe({ profile: profile.name, signal: controller.signal, ...(prToolsPath ? { prToolsPath } : {}) });

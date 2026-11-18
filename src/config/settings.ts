@@ -8,9 +8,11 @@ export class SettingsError extends Error {}
 export interface Settings {
   mergeStatuses?: string[];
   intervalMs?: number;
+  // Unset means on: see includesAssigned.
+  includeAssigned?: boolean;
 }
 
-export const SETTING_KEYS = ["MERGE_STATUS", "POLL_INTERVAL"] as const;
+export const SETTING_KEYS = ["MERGE_STATUS", "POLL_INTERVAL", "INCLUDE_ASSIGNED"] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
 const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.*?)\s*$/;
@@ -43,10 +45,30 @@ export function splitStatuses(value: string): string[] {
   ];
 }
 
+// mine lists the PRs assigned to the viewer too, unless INCLUDE_ASSIGNED=off.
+export function includesAssigned(settings: Settings): boolean {
+  return settings.includeAssigned ?? true;
+}
+
+const SWITCH: Record<string, "on" | "off"> = {
+  on: "on",
+  true: "on",
+  yes: "on",
+  "1": "on",
+  off: "off",
+  false: "off",
+  no: "off",
+  "0": "off",
+};
+
 // The normalized text to store for a value, or the reason it is not acceptable.
 function check(key: SettingKey, value: string): { value: string } | { problem: string } {
   if (value.trim() === "") return { value: "" };
   if (key === "MERGE_STATUS") return { value: splitStatuses(value).join(",") };
+  if (key === "INCLUDE_ASSIGNED") {
+    const on = SWITCH[value.trim().toLowerCase()];
+    return on ? { value: on } : { problem: "use on or off" };
+  }
   const result = readInterval(value);
   if ("ms" in result) return { value: value.trim() };
   return {
@@ -55,9 +77,11 @@ function check(key: SettingKey, value: string): { value: string } | { problem: s
 }
 
 export function describeSetting(key: SettingKey): string {
-  return key === "MERGE_STATUS"
-    ? 'Jira statuses that mean "time to merge", comma-separated'
-    : "time between polls: 90s, 5m, 1h (from 1m to 12h)";
+  return {
+    MERGE_STATUS: 'Jira statuses that mean "time to merge", comma-separated',
+    POLL_INTERVAL: "time between polls: 90s, 5m, 1h (from 1m to 12h)",
+    INCLUDE_ASSIGNED: "mine also lists PRs assigned to you: on or off",
+  }[key];
 }
 
 // One KEY=value per line, # comments. Typos are errors rather than silently ignored settings.
@@ -96,13 +120,14 @@ export class SettingsStore {
   }
 
   load(): Settings {
-    const { MERGE_STATUS, POLL_INTERVAL } = this.values();
+    const { MERGE_STATUS, POLL_INTERVAL, INCLUDE_ASSIGNED } = this.values();
     const settings: Settings = {};
     if (MERGE_STATUS) settings.mergeStatuses = splitStatuses(MERGE_STATUS);
     if (POLL_INTERVAL) {
       const result = readInterval(POLL_INTERVAL);
       if ("ms" in result) settings.intervalMs = result.ms;
     }
+    if (INCLUDE_ASSIGNED) settings.includeAssigned = INCLUDE_ASSIGNED === "on";
     return settings;
   }
 

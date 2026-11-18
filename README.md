@@ -78,14 +78,14 @@ It polls every gh-pr-tools profile you have; to poll only some, name them with `
 
 While `run` is going, the bot also answers you. It has buttons under the input field and a `/` menu:
 
-| Command     | Answer                                                                                                             |
-| ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| `/todo`     | PRs where you are a reviewer: 🔔 your turn (review requests, replies in your threads), then ⏳ waiting for authors |
-| `/mine`     | your open PRs: 🔔 your turn (threads, changes, a broken build), ✅ approved (ready, or one fix away), 👀 in review |
-| `/tracked`  | the PRs and Jira tickets you follow; `/track PRJ-1824 1281` adds, `/untrack` removes                               |
-| `/status`   | the profiles, the last polls and the settings                                                                      |
-| `/settings` | view and change the poll interval and the Jira merge status                                                        |
-| `/help`     | what the bot can do (`/start` shows it too)                                                                        |
+| Command     | Answer                                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| `/todo`     | PRs where you are a reviewer: 🔔 your turn (review requests, replies in your threads), then ⏳ waiting for authors  |
+| `/mine`     | your open PRs and those assigned to you: 🔔 your turn (threads, changes, a broken build), ✅ approved, 👀 in review |
+| `/tracked`  | the PRs and Jira tickets you follow; `/track PRJ-1824 1281` adds, `/untrack` removes                                |
+| `/status`   | the profiles, the last polls and the settings                                                                       |
+| `/settings` | view and change the poll interval, the Jira merge status and whether `/mine` lists PRs assigned to you              |
+| `/help`     | what the bot can do (`/start` shows it too)                                                                         |
 
 ```
 📤 Mine · 5 PRs · 15:49
@@ -177,7 +177,7 @@ no PR yet
                           [🔄 Refresh] [✖ Close]
 ```
 
-Notifications about a followed PR say whose it is (`📌 #1273 … · alice`). With a sound: a new PR for a ticket, ✅ review passed (enough approvals and nobody asking for changes; CI and conflicts do not stop testing), 🟣 merged and ✖️ closed. Without a sound: changes requested, a failed CI and CI passing again after a failure, conflicts, a Jira status move (`🎫 PRJ-1824: In Review → Approved`), approvals below the threshold and new threads (one short line each). Your own PRs are left to `mine` while it is polled. Once something is done, a `🧹 Clear done` button appears: it removes the PRs that merged or closed and the tickets whose PRs all did; nothing is removed by itself.
+Notifications about a followed PR say whose it is (`📌 #1273 … · alice`). With a sound: a new PR for a ticket, ✅ review passed (enough approvals and nobody asking for changes; CI and conflicts do not stop testing), 🟣 merged and ✖️ closed. Without a sound: changes requested, a failed CI and CI passing again after a failure, conflicts, a Jira status move (`🎫 PRJ-1824: In Review → Approved`), approvals below the threshold and new threads (one short line each). Your own PRs, and those `mine` lists because they are assigned to you, are left to `mine` while it is polled. Once something is done, a `🧹 Clear done` button appears: it removes the PRs that merged or closed and the tickets whose PRs all did; nothing is removed by itself.
 
 The list is a plain file, `~/.config/pr-tools-notifier/tracked/<profile>.txt`, one reference per line (`#` starts a comment), the format of gh-pr-tools' `track --list`. It is read again on every poll, so an edit by hand applies on the next one. Tracking needs gh-pr-tools from October 28, 2026 or later (`gh extension upgrade pr-tools`). With an older one, `mine` and `todo` keep working, but every poll of the list fails, and after three in a row the `⚠️` message says to update. While the list is empty, nothing is polled for it.
 
@@ -215,7 +215,7 @@ pr-tools-notifier run -p web -p ops:track
 
 ### Settings
 
-Two optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Change them in Telegram with `/settings` (the interval with a preset button or as a message such as `2m`, the Jira status as a message), edit the file by hand, or use the command:
+Three optional settings live in `~/.config/pr-tools-notifier/settings.env`, one `KEY=value` per line (`#` starts a comment). Change them in Telegram with `/settings` (the interval with a preset button or as a message such as `2m`, the Jira status as a message, assigned PRs with `👤 Hide assigned` / `👤 Show assigned`), edit the file by hand, or use the command:
 
 ```
 pr-tools-notifier config                       show the settings and where the file is
@@ -223,12 +223,15 @@ pr-tools-notifier config set KEY VALUE         change one (quote a value with sp
 pr-tools-notifier config unset KEY             remove one
 ```
 
-| Key             | Value                                                                   | Default |
-| --------------- | ----------------------------------------------------------------------- | ------- |
-| `MERGE_STATUS`  | Jira statuses that mean "time to merge", comma-separated: `Merge,Ready` | none    |
-| `POLL_INTERVAL` | time between polls: `90s`, `5m`, `1h`; from `1m` to `12h`               | `1m`    |
+| Key                | Value                                                                                        | Default |
+| ------------------ | -------------------------------------------------------------------------------------------- | ------- |
+| `MERGE_STATUS`     | Jira statuses that mean "time to merge", comma-separated: `Merge,Ready`                      | none    |
+| `POLL_INTERVAL`    | time between polls: `90s`, `5m`, `1h`; from `1m` to `12h`                                    | `1m`    |
+| `INCLUDE_ASSIGNED` | `on` or `off`: `mine` also lists PRs assigned to you (`gh pr-tools mine --include-assigned`) | `on`    |
 
 `config set` accepts the key in any case and with `-` for `_` (`merge-status`). A running `run` re-reads the file and applies a change within a minute, no restart needed. A typo stops `run` at start with the file and line, instead of being silently ignored; while running, a broken file keeps the last good settings and the terminal says why. The `--interval` option of `run` overrides `POLL_INTERVAL` for one run.
+
+With `INCLUDE_ASSIGNED` on, a PR someone else opened and assigned to you (or that you were added to as an assignee) is treated as yours: it shows in `/mine` and notifies like your own PRs, so a reply its author leaves in a thread counts as one waiting for you. Turning the setting on adds those PRs to the baseline without notifying about their past.
 
 ## Commands
 

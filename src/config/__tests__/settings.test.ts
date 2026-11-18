@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { readInterval } from "../interval.js";
-import { settingKey, SettingsError, SettingsStore } from "../settings.js";
+import { includesAssigned, settingKey, SettingsError, SettingsStore } from "../settings.js";
 
 let dir: string;
 let store: SettingsStore;
@@ -75,7 +75,7 @@ describe("SettingsStore.load", () => {
     write("# comment\nMERGE_STATUSES=Merge\n");
     expect(() => store.load()).toThrow(SettingsError);
     expect(() => store.load()).toThrow(
-      `${store.path}:2: unknown setting 'MERGE_STATUSES' (known: MERGE_STATUS, POLL_INTERVAL)`
+      `${store.path}:2: unknown setting 'MERGE_STATUSES' (known: MERGE_STATUS, POLL_INTERVAL, INCLUDE_ASSIGNED)`
     );
   });
 
@@ -87,6 +87,23 @@ describe("SettingsStore.load", () => {
   ])("refuses %j", (line, message) => {
     write(`${line}\n`);
     expect(() => store.load()).toThrow(`${store.path}:1: ${message}`);
+  });
+});
+
+describe("INCLUDE_ASSIGNED", () => {
+  test("is on unless set to off", () => {
+    expect(includesAssigned(store.load())).toBe(true);
+    write("INCLUDE_ASSIGNED=off\n");
+    expect(store.load()).toEqual({ includeAssigned: false });
+    expect(includesAssigned(store.load())).toBe(false);
+    write("include-assigned=YES\n");
+    expect(store.load()).toEqual({ includeAssigned: true });
+  });
+
+  test("stores on or off, whatever word was given", () => {
+    expect(store.set("INCLUDE_ASSIGNED", "false")).toBe("off");
+    expect(store.set("INCLUDE_ASSIGNED", "1")).toBe("on");
+    expect(() => store.set("INCLUDE_ASSIGNED", "maybe")).toThrow("INCLUDE_ASSIGNED use on or off");
   });
 });
 

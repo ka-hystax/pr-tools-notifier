@@ -6,7 +6,7 @@ import {
   MIN_INTERVAL_MS,
   readInterval,
 } from "../config/interval.js";
-import type { Settings } from "../config/settings.js";
+import { includesAssigned, type Settings } from "../config/settings.js";
 import { bold, escapeHtml } from "../format/format.js";
 import type { ApiButton } from "../telegram/api.js";
 
@@ -38,8 +38,20 @@ function statusLine({ settings }: SettingsView): string {
     : "🎫 Jira merge status: not set, “Time to merge” comes as soon as a PR is ready";
 }
 
+function assignedLine({ settings }: SettingsView): string {
+  const on = includesAssigned(settings);
+  const value = `${on ? "on" : "off"}${settings.includeAssigned === undefined ? " (default)" : ""}`;
+  return `👤 PRs assigned to you in /mine: ${bold(value)}`;
+}
+
 export function settingsScreen(view: SettingsView): { text: string; buttons: ApiButton[][] } {
-  const lines = [`⚙️ ${bold("Settings")}`, `⏱ Poll interval: ${intervalValue(view)}`, statusLine(view), ""];
+  const lines = [
+    `⚙️ ${bold("Settings")}`,
+    `⏱ Poll interval: ${intervalValue(view)}`,
+    statusLine(view),
+    assignedLine(view),
+    "",
+  ];
   lines.push(
     view.editable
       ? "<i>Changes apply within a minute, no restart needed.</i>"
@@ -50,7 +62,11 @@ export function settingsScreen(view: SettingsView): { text: string; buttons: Api
     { text: "⏱ Interval", data: "si" },
     { text: "🎫 Jira status", data: "sj" },
   ];
-  return { text: lines.join("\n"), buttons: view.editable ? [edit, [CLOSE]] : [[CLOSE]] };
+  const assigned: ApiButton = {
+    text: includesAssigned(view.settings) ? "👤 Hide assigned" : "👤 Show assigned",
+    data: includesAssigned(view.settings) ? "sa:off" : "sa:on",
+  };
+  return { text: lines.join("\n"), buttons: view.editable ? [edit, [assigned], [CLOSE]] : [[CLOSE]] };
 }
 
 export function intervalScreen(view: SettingsView): { text: string; buttons: ApiButton[][] } {

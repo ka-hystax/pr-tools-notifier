@@ -57,6 +57,22 @@ describe("ghSource", () => {
     expect(calls[0]!.options.timeout).toBe(5_000);
   });
 
+  test("asks mine for the PRs assigned to the viewer while the setting says so, and only mine", async () => {
+    const { exec, calls } = fake(mineJson);
+    let assigned = true;
+    const source = ghSource({ profile: "work", exec, includeAssigned: () => assigned });
+    await source("mine");
+    assigned = false;
+    await source("mine");
+    expect(calls.map((c) => c.args.slice(3))).toEqual([
+      ["mine", "--json", "--include-assigned"],
+      ["mine", "--json"],
+    ]);
+    const todo = fake(todoJson);
+    await ghSource({ profile: "work", exec: todo.exec, includeAssigned: true })("todo");
+    expect(todo.calls[0]!.args).toEqual(["pr-tools", "-p", "work", "todo", "--json"]);
+  });
+
   describe("track", () => {
     const trackJson = readFixtureText("track");
     const list = (hasTickets: boolean) => ({ listPath: "/cfg/tracked/work.txt", hasTickets: () => hasTickets });

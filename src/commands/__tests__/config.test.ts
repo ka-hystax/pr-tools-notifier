@@ -30,6 +30,7 @@ describe("runConfig", () => {
     expect(r.out).toContain(`${store.path} (not created yet)`);
     expect(r.out).toMatch(/MERGE_STATUS\s+not set/);
     expect(r.out).toMatch(/POLL_INTERVAL\s+1m \(default\)/);
+    expect(r.out).toMatch(/INCLUDE_ASSIGNED\s+on \(default\)/);
   });
 
   test("sets a value, then shows it", () => {
@@ -46,7 +47,7 @@ describe("runConfig", () => {
   test("explains an unknown key and a bad value without changing the file", () => {
     expect(run({ type: "set", key: "merge-statuses", value: "Merge" })).toEqual({
       ok: false,
-      out: "Unknown setting 'merge-statuses' (known: merge-status, poll-interval).",
+      out: "Unknown setting 'merge-statuses' (known: merge-status, poll-interval, include-assigned).",
     });
     expect(run({ type: "set", key: "poll-interval", value: "13h" })).toEqual({
       ok: false,

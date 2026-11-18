@@ -522,8 +522,23 @@ describe("settings", () => {
     expect(sent.text).toContain("Poll interval: <b>1m (default)</b>");
     expect(sent.text).toContain("Jira merge status: not set");
     expect(sent.text).toContain("apply within a minute");
-    expect(buttonData(sent)).toEqual(["si", "sj", "x"]);
+    expect(sent.text).toContain("PRs assigned to you in /mine: <b>on (default)</b>");
+    expect(buttonData(sent)).toEqual(["si", "sj", "sa:off", "x"]);
     expect(h.api.deleted).toEqual([11]);
+  });
+
+  test("switches the assigned PRs in /mine off and on again", async () => {
+    const h = withSettings();
+    await h.bot.handle(h.message("/settings", 11));
+    const id = h.api.sent[0]!.id;
+    await h.bot.handle(h.tap("sa:off", id));
+    expect(h.store.load()).toEqual({ includeAssigned: false });
+    expect(h.api.answers.at(-1)).toMatchObject({ text: "Saved" });
+    expect(last(h).text).toContain("PRs assigned to you in /mine: <b>off</b>");
+    expect(last(h).text).toContain("are left out of /mine from the next poll");
+    expect(buttonData(last(h))).toEqual(["si", "sj", "sa:on", "x"]);
+    await h.bot.handle(h.tap("sa:on", id));
+    expect(h.store.load()).toEqual({ includeAssigned: true });
   });
 
   test("without a settings store it only shows them", async () => {

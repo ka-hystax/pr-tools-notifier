@@ -14,7 +14,10 @@ export type ConfigAction = { type: "show" } | { type: "set"; key: string; value:
 const NAMES = SETTING_KEYS.map((k) => k.toLowerCase().replace(/_/g, "-")).join(", ");
 
 function shownValue(key: SettingKey, value: string | undefined): string {
-  if (!value) return key === "POLL_INTERVAL" ? `${DEFAULT_INTERVAL_MS / 60_000}m (default)` : "not set";
+  if (!value) {
+    if (key === "POLL_INTERVAL") return `${DEFAULT_INTERVAL_MS / 60_000}m (default)`;
+    return key === "INCLUDE_ASSIGNED" ? "on (default)" : "not set";
+  }
   return key === "MERGE_STATUS" ? splitStatuses(value).join(", ") : value;
 }
 
@@ -23,7 +26,8 @@ function show(store: SettingsStore, out: (line: string) => void): boolean {
   out(`Settings file: ${store.path}${store.exists() ? "" : " (not created yet)"}`);
   const shown = SETTING_KEYS.map((key) => shownValue(key, values[key]));
   const width = Math.max(...shown.map((v) => v.length));
-  SETTING_KEYS.forEach((key, i) => out(`  ${key.padEnd(13)} ${shown[i]!.padEnd(width)}  ${describeSetting(key)}`));
+  const keyWidth = Math.max(...SETTING_KEYS.map((k) => k.length));
+  SETTING_KEYS.forEach((key, i) => out(`  ${key.padEnd(keyWidth)} ${shown[i]!.padEnd(width)}  ${describeSetting(key)}`));
   return true;
 }
 
